@@ -45,7 +45,6 @@ const COLORS = [
 // ================== 世界生成 ====================
 const WORLD_W = 64, WORLD_D = 64, WORLD_H = 28;
 const BLOCK_SIZE = 1;
-// ---- 需求3：指定种子 ----
 const noise = new ValueNoise(54188114514);
 
 function createWorld() {
@@ -68,25 +67,22 @@ function createWorld() {
                 0.40*noise.fbm(x/7+99, z/7-33, {octaves:1, gain:0.7, lacunarity:5.8})
             );
             let h = Math.floor(7 + 12 * base + 2.5*aux);
-            // 基岩
             blocks[x][0][z]=BLOCK.bedrock;
             for(let y=1; y<=h; ++y){
                 if(y<4 || (base>0.70 && y<h && y>16)) blocks[x][y][z]=BLOCK.stone;
                 else if(y<h) blocks[x][y][z]=BLOCK.dirt;
                 else blocks[x][y][z]=BLOCK.grass;
             }
-            // 水面
             let wl = 12;
             if(h<wl-1) for(let y=h+1; y<wl; ++y) blocks[x][y][z]=BLOCK.water;
         }
     }
-    // ---- 需求1：树干最低2 ----
+    // 树：干最矮2
     for(let i=0; i<50; ++i){
         let x = Math.floor(Math.random()*(WORLD_W-7)+3), z = Math.floor(Math.random()*(WORLD_D-7)+3);
         let y;
         for(y=WORLD_H-3; y>2; --y) if([BLOCK.grass,BLOCK.dirt].includes(blocks[x][y][z]))break;
         if(y<4) continue;
-        // 至少2格树干
         let height = 2 + Math.floor(noise.noise(x*0.20,z*0.21)*2.8);
         for(let h=1;h<=height;++h) blocks[x][y+h][z]=BLOCK.log;
         for(let lx=-2;lx<=2;++lx)
@@ -101,27 +97,21 @@ function createWorld() {
     return blocks;
 }
 
-// ================== 游戏主对象 ===================
 const gameState = {
-    pointerLocked: false,
-    showInfo: true,
-    // 出生点放地图高处中心
-    px: WORLD_W/2,
-    py: Math.floor(WORLD_H*0.80),
-    pz: WORLD_D/2,
+    pointerLocked: false, showInfo: true,
+    px: WORLD_W/2, py: Math.floor(WORLD_H*0.80), pz: WORLD_D/2,
     vx: 0, vy: 0, vz: 0,
-    lookH: Math.PI / 2,
-    lookV: -0.30, // 稍微向下
+    lookH: Math.PI / 2,     // 向 X 正方向
+    lookV: -0.30,
     fly: false,
     move: { w: 0, a: 0, s: 0, d: 0, up: 0, down: 0 },
     speed: 0.17,
     size: 0.6,
     blocks: createWorld(),
 };
-
 window.gameState = gameState;
 
-// ================== ThreeJS 场景 ====================
+// ================== ThreeJS 场景、动态渲染区块 ====================
 let camera, scene, renderer, blockMeshes;
 function setupThree() {
     scene = new THREE.Scene();
@@ -131,41 +121,36 @@ function setupThree() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.domElement.style.zIndex=5;
     document.body.appendChild(renderer.domElement);
-    // 灯光
     const ambient = new THREE.AmbientLight(0xffffff, 0.72); scene.add(ambient);
     const dir = new THREE.DirectionalLight(0xffffee, 1.1); dir.position.set(60,80,5); scene.add(dir);
-    // block mesh
     blockMeshes = new Map();
-    // ---- 需求2: 控制区块范围，只渲染距离摄像机 <= 16 格的方块 ----
     renderVisibleBlocks();
 }
 
-// 渲染距离摄像机 16 格内方块，如果已渲染则复用（动态图块卸载可加优化，这里只做加载，不做卸载）
+// 渲染距离摄像机 16 格内的方块，超出即时卸载
 function renderVisibleBlocks() {
     const RENDER_DIST = 16;
     let camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
+
+    // 渲染区块
     for(let x=0;x<WORLD_W;++x)
      for(let y=0;y<WORLD_H;++y)
       for(let z=0;z<WORLD_D;++z) {
         let id = gameState.blocks[x][y][z];
-        if(id===null) continue;
+        let key = `${x}_${y}_${z}`;
         let dx = x-camX, dy = y-camY, dz = z-camZ;
-        if(Math.max(Math.abs(dx),Math.abs(dy),Math.abs(dz)) > RENDER_DIST) {
-            // 超出渲染距离则清理
-            let key = `${x}_${y}_${z}`;
+        let inRange = Math.max(Math.abs(dx),Math.abs(dy),Math.abs(dz)) <= RENDER_DIST;
+        if(id !== null && inRange) {
+            if(!blockMeshes.has(key)) addBlockMesh(x,y,z,id);
+        } else {
             if(blockMeshes.has(key)) {
-                let mesh = blockMeshes.get(key);
-                scene.remove(mesh);
+                scene.remove(blockMeshes.get(key));
                 blockMeshes.delete(key);
             }
-            continue;
         }
-        let key = `${x}_${y}_${z}`;
-        if(!blockMeshes.has(key)) addBlockMesh(x,y,z,id);
       }
 }
 
-// Mesh 添加与删除
 function addBlockMesh(x, y, z, id) {
     let color = COLORS[id]||0xff00ff;
     let geometry = new THREE.BoxGeometry(BLOCK_SIZE,BLOCK_SIZE,BLOCK_SIZE);
@@ -175,6 +160,7 @@ function addBlockMesh(x, y, z, id) {
     scene.add(mesh);
     blockMeshes.set(`${x}_${y}_${z}`, mesh);
 }
+
 function removeBlockMesh(x, y, z) {
     let key = `${x}_${y}_${z}`;
     let mesh = blockMeshes.get(key);
@@ -188,24 +174,26 @@ window.addEventListener('resize',()=>{
     camera.updateProjectionMatrix();
 });
 
-// ================== 玩家位置/视角 ====================
+// ================== 玩家视角 ====================
 function updateCamera() {
     camera.position.set(gameState.px, gameState.py, gameState.pz);
+    // 正确的第一人称视角
     let lx = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
     let ly = Math.sin(gameState.lookV);
     let lz = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
     camera.lookAt(gameState.px+lx, gameState.py+ly, gameState.pz+lz);
 }
 
-// 碰撞/世界判定
+// ============ 碰撞系统，落地自动弹出纠偏 =============
 function isSolid(x, y, z) {
     x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
     if(x<0||x>=WORLD_W||y<0||y>=WORLD_H||z<0||z>=WORLD_D) return true;
     let val = gameState.blocks[x][y][z];
     return val!==null && val!==BLOCK.water && val!==BLOCK.leaf;
 }
+
 function canStand(nx, ny, nz) {
-    let h = 1.64, r = 0.28;
+    let h = 1.64, r = 0.29;
     for(let y=ny-0.8; y<ny+h; y+=0.38)
     for(let dx=-r; dx<=r; dx+=0.35)
     for(let dz=-r; dz<=r; dz+=0.35) {
@@ -214,17 +202,16 @@ function canStand(nx, ny, nz) {
     return true;
 }
 
-// ================== 玩家运动物理主循环 ====================
+// ================== 玩家物理&反卡死移动 ====================
 function stepPlayer() {
     let ang = gameState.lookH, speed = gameState.speed;
     let dx = 0, dz = 0;
-
-    // ---- 需求4: 修正按键检测 ----
-    // WASD/Space/Shift 通用，支持所有主流输入法，防止页面失去焦点
-    if(gameState.move.w) dz -= Math.cos(ang)*speed, dx -= Math.sin(ang)*speed;
-    if(gameState.move.s) dz += Math.cos(ang)*speed, dx += Math.sin(ang)*speed;
-    if(gameState.move.a) dz -= Math.cos(ang+Math.PI/2)*speed, dx -= Math.sin(ang+Math.PI/2)*speed;
-    if(gameState.move.d) dz -= Math.cos(ang-Math.PI/2)*speed, dx -= Math.sin(ang-Math.PI/2)*speed;
+    // 前后
+    if(gameState.move.w) { dx += Math.cos(ang)*speed; dz += Math.sin(ang)*speed; }
+    if(gameState.move.s) { dx -= Math.cos(ang)*speed; dz -= Math.sin(ang)*speed; }
+    // 左右
+    if(gameState.move.a) { dx += Math.cos(ang - Math.PI/2)*speed; dz += Math.sin(ang - Math.PI/2)*speed; }
+    if(gameState.move.d) { dx += Math.cos(ang + Math.PI/2)*speed; dz += Math.sin(ang + Math.PI/2)*speed; }
     let px = gameState.px, py = gameState.py, pz = gameState.pz;
     let dy = 0;
     if(gameState.fly){
@@ -234,17 +221,26 @@ function stepPlayer() {
         gameState.vy -= 0.011;
         dy = gameState.vy;
     }
-    let tryMove = (nx, ny, nz) => canStand(nx, ny, nz);
-    if(tryMove(px+dx, py, pz)) px += dx;
-    if(tryMove(px, py, pz+dz)) pz += dz;
-    if(tryMove(px, py+dy, pz)) { py += dy; }
-    else {
-        if(dy<0) { py = Math.floor(py)+0.01; gameState.vy=0; }
-        if(dy>0) gameState.vy=0;
+
+    // 物理碰撞&地面弹出：先Y
+    if(canStand(px, py+dy, pz)) {
+        py += dy;
+    } else {
+        // 如果掉进方块，用最小步进尝试踢出
+        let maxTry = 8, found = false, newY = py;
+        for(let t=0;t<=maxTry;++t) {
+            if(canStand(px, py+t*0.1, pz)) { newY=py+t*0.1; found=true; break; }
+        }
+        if(found) py = newY;
+        gameState.vy = 0;
     }
-    if (gameState.blocks[Math.floor(px)][Math.floor(py)][Math.floor(pz)] === BLOCK.water) {
-        gameState.vy = 0.04;
-    }
+
+    // X方向
+    if(canStand(px+dx, py, pz)) px += dx;
+    // Z方向
+    if(canStand(px, py, pz+dz)) pz += dz;
+
+    // 越界保护
     px = Math.max(1, Math.min(WORLD_W-2, px));
     py = Math.max(2, Math.min(WORLD_H-2, py));
     pz = Math.max(1, Math.min(WORLD_D-2, pz));
@@ -255,12 +251,12 @@ function stepPlayer() {
 function animate() {
     requestAnimationFrame(animate);
     stepPlayer();
-    renderVisibleBlocks(); // <--- 需求2：仅渲染可见区快
+    renderVisibleBlocks();
     updateCamera();
     renderer && renderer.render(scene, camera);
 }
 
-// ================== 方块“挖掘/放置” ====================
+// ================== 方块射线、交互 ====================
 function raycastBlock(maxDist=6) {
     let ox = gameState.px, oy = gameState.py+0.6, oz = gameState.pz;
     let lx = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
@@ -304,7 +300,7 @@ function onMousedown(e) {
 }
 function onContextMenu(e) { e.preventDefault(); }
 
-// ---- 改按键绑定方式，支持任意焦点 ----
+// ================== 键鼠、飞行、视角 ====================
 function setupInput() {
     renderer.domElement.addEventListener('click',()=>{
         renderer.domElement.requestPointerLock();
@@ -316,13 +312,13 @@ function setupInput() {
     });
     document.addEventListener('mousemove',e=>{
         if(!gameState.pointerLocked)return;
-        gameState.lookH -= e.movementX*0.002;
-        gameState.lookV -= e.movementY*0.002;
+        // 正确视角控制：左右增加，抬头为lookV减小
+        gameState.lookH += e.movementX * 0.002;
+        gameState.lookV -= e.movementY * 0.002;
         let V=Math.PI/2*0.99;
         if(gameState.lookV<-V)gameState.lookV=-V;
         if(gameState.lookV>V)gameState.lookV=V;
     });
-    // ---- 需求4: 全局键盘 hook，且兼容多操作系统
     window.addEventListener('keydown',e=>{
         if(e.code==='KeyW')gameState.move.w=1;
         if(e.code==='KeyA')gameState.move.a=1;
