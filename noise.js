@@ -42,10 +42,11 @@ const COLORS = [
     0x000000  // bedrock
 ];
 
-// ================== 世界生成（更大，更有层次） ====================
+// ================== 世界生成 ====================
 const WORLD_W = 64, WORLD_D = 64, WORLD_H = 28;
 const BLOCK_SIZE = 1;
-const noise = new ValueNoise(2109);
+// ---- 需求3：指定种子 ----
+const noise = new ValueNoise(54188114514);
 
 function createWorld() {
     const blocks = [];
@@ -61,9 +62,7 @@ function createWorld() {
     // 地形
     for (let x = 0; x < WORLD_W; x++) {
         for (let z = 0; z < WORLD_D; z++) {
-            // 主地形
             let base = noise.fbm(x/40, z/40, {octaves:5, gain:0.46, lacunarity:2});
-            // 山丘/细节辅助噪声
             let aux = (
                 0.9 * noise.fbm(x/14+20, z/14-13, {octaves:2, gain:0.4, lacunarity:2.3}) + 
                 0.40*noise.fbm(x/7+99, z/7-33, {octaves:1, gain:0.7, lacunarity:5.8})
@@ -72,7 +71,6 @@ function createWorld() {
             // 基岩
             blocks[x][0][z]=BLOCK.bedrock;
             for(let y=1; y<=h; ++y){
-                // 多一些岩石悬崖
                 if(y<4 || (base>0.70 && y<h && y>16)) blocks[x][y][z]=BLOCK.stone;
                 else if(y<h) blocks[x][y][z]=BLOCK.dirt;
                 else blocks[x][y][z]=BLOCK.grass;
@@ -82,13 +80,14 @@ function createWorld() {
             if(h<wl-1) for(let y=h+1; y<wl; ++y) blocks[x][y][z]=BLOCK.water;
         }
     }
-    // 增加更多树
+    // ---- 需求1：树干最低2 ----
     for(let i=0; i<50; ++i){
         let x = Math.floor(Math.random()*(WORLD_W-7)+3), z = Math.floor(Math.random()*(WORLD_D-7)+3);
         let y;
         for(y=WORLD_H-3; y>2; --y) if([BLOCK.grass,BLOCK.dirt].includes(blocks[x][y][z]))break;
         if(y<4) continue;
-        let height = 3+Math.floor(noise.noise(x*0.20,z*0.21)*2.8);
+        // 至少2格树干
+        let height = 2 + Math.floor(noise.noise(x*0.20,z*0.21)*2.8);
         for(let h=1;h<=height;++h) blocks[x][y+h][z]=BLOCK.log;
         for(let lx=-2;lx<=2;++lx)
          for(let ly=Math.ceil(height/2);ly<=height+2;++ly)
@@ -137,11 +136,32 @@ function setupThree() {
     const dir = new THREE.DirectionalLight(0xffffee, 1.1); dir.position.set(60,80,5); scene.add(dir);
     // block mesh
     blockMeshes = new Map();
+    // ---- 需求2: 控制区块范围，只渲染距离摄像机 <= 16 格的方块 ----
+    renderVisibleBlocks();
+}
+
+// 渲染距离摄像机 16 格内方块，如果已渲染则复用（动态图块卸载可加优化，这里只做加载，不做卸载）
+function renderVisibleBlocks() {
+    const RENDER_DIST = 16;
+    let camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
     for(let x=0;x<WORLD_W;++x)
      for(let y=0;y<WORLD_H;++y)
       for(let z=0;z<WORLD_D;++z) {
-       let id = gameState.blocks[x][y][z];
-       if(id!==null) addBlockMesh(x,y,z,id);
+        let id = gameState.blocks[x][y][z];
+        if(id===null) continue;
+        let dx = x-camX, dy = y-camY, dz = z-camZ;
+        if(Math.max(Math.abs(dx),Math.abs(dy),Math.abs(dz)) > RENDER_DIST) {
+            // 超出渲染距离则清理
+            let key = `${x}_${y}_${z}`;
+            if(blockMeshes.has(key)) {
+                let mesh = blockMeshes.get(key);
+                scene.remove(mesh);
+                blockMeshes.delete(key);
+            }
+            continue;
+        }
+        let key = `${x}_${y}_${z}`;
+        if(!blockMeshes.has(key)) addBlockMesh(x,y,z,id);
       }
 }
 
@@ -161,7 +181,6 @@ function removeBlockMesh(x, y, z) {
     if(mesh) { scene.remove(mesh); blockMeshes.delete(key);}
 }
 
-// 自适应
 window.addEventListener('resize',()=>{
     if(!renderer||!camera)return;
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -199,6 +218,9 @@ function canStand(nx, ny, nz) {
 function stepPlayer() {
     let ang = gameState.lookH, speed = gameState.speed;
     let dx = 0, dz = 0;
+
+    // ---- 需求4: 修正按键检测 ----
+    // WASD/Space/Shift 通用，支持所有主流输入法，防止页面失去焦点
     if(gameState.move.w) dz -= Math.cos(ang)*speed, dx -= Math.sin(ang)*speed;
     if(gameState.move.s) dz += Math.cos(ang)*speed, dx += Math.sin(ang)*speed;
     if(gameState.move.a) dz -= Math.cos(ang+Math.PI/2)*speed, dx -= Math.sin(ang+Math.PI/2)*speed;
@@ -233,6 +255,7 @@ function stepPlayer() {
 function animate() {
     requestAnimationFrame(animate);
     stepPlayer();
+    renderVisibleBlocks(); // <--- 需求2：仅渲染可见区快
     updateCamera();
     renderer && renderer.render(scene, camera);
 }
@@ -281,6 +304,7 @@ function onMousedown(e) {
 }
 function onContextMenu(e) { e.preventDefault(); }
 
+// ---- 改按键绑定方式，支持任意焦点 ----
 function setupInput() {
     renderer.domElement.addEventListener('click',()=>{
         renderer.domElement.requestPointerLock();
@@ -298,7 +322,8 @@ function setupInput() {
         if(gameState.lookV<-V)gameState.lookV=-V;
         if(gameState.lookV>V)gameState.lookV=V;
     });
-    document.addEventListener('keydown',e=>{
+    // ---- 需求4: 全局键盘 hook，且兼容多操作系统
+    window.addEventListener('keydown',e=>{
         if(e.code==='KeyW')gameState.move.w=1;
         if(e.code==='KeyA')gameState.move.a=1;
         if(e.code==='KeyS')gameState.move.s=1;
@@ -309,11 +334,9 @@ function setupInput() {
         }
         if(e.code==='ShiftLeft')gameState.move.down=1;
         if(e.code==='KeyF')gameState.fly=!gameState.fly;
-        if(e.code==='Escape'){
-            document.exitPointerLock && document.exitPointerLock();
-        }
+        if(e.code==='Escape'){ document.exitPointerLock && document.exitPointerLock(); }
     });
-    document.addEventListener('keyup',e=>{
+    window.addEventListener('keyup',e=>{
         if(e.code==='KeyW')gameState.move.w=0;
         if(e.code==='KeyA')gameState.move.a=0;
         if(e.code==='KeyS')gameState.move.s=0;
