@@ -1,8 +1,8 @@
 const { createApp, ref } = Vue;
 
 // ================== 方块定义 ===================
-// 草、土、石、树（木/叶）、水
-const BLOCK = { grass:0, dirt:1, stone:2, log:3, leaf:4, water:5 };
+// 草、土、石、树（木/叶）、水、基岩
+const BLOCK = { grass:0, dirt:1, stone:2, log:3, leaf:4, water:5,bedrock:6 };
 const COLORS = [
     0x4CAF50, // grass
     0x8B5A2B, // dirt
@@ -10,6 +10,7 @@ const COLORS = [
     0x8B4513, // log
     0x19cc19, // leaf
     0x4091F7, // water
+    0x000000, // bedrock
 ];
 
 // ================== 世界生成 ====================
