@@ -1,4 +1,4 @@
-// --- 改进 ValueNoise + Fractal Brownian Motion 地形采样
+// --- ValueNoise + Fractal Brownian Motion 地形采样
 class ValueNoise {
     constructor(seed = 1) {this.seed = seed;}
     hash(x, y) {
@@ -19,7 +19,6 @@ class ValueNoise {
         const xb = this.lerp(bl, br, this.fade(xf));
         return this.lerp(xt, xb, this.fade(yf));
     }
-    // 分型噪声 Fractal Brownian Motion，octave支持更弹性
     fbm(x, y, {octaves = 5, gain = 0.5, lacunarity = 2.0, amp = 1, freq = 1} = {}) {
         let sum = 0, totalAmp = 0;
         for (let i = 0; i < octaves; ++i) {
@@ -74,7 +73,7 @@ function createWorld() {
             blocks[x][0][z]=BLOCK.bedrock;
             for(let y=1; y<=h; ++y){
                 // 多一些岩石悬崖
-                if(y<4 || base>0.70 && y<h && y>16) blocks[x][y][z]=BLOCK.stone;
+                if(y<4 || (base>0.70 && y<h && y>16)) blocks[x][y][z]=BLOCK.stone;
                 else if(y<h) blocks[x][y][z]=BLOCK.dirt;
                 else blocks[x][y][z]=BLOCK.grass;
             }
@@ -83,17 +82,14 @@ function createWorld() {
             if(h<wl-1) for(let y=h+1; y<wl; ++y) blocks[x][y][z]=BLOCK.water;
         }
     }
-    // 增加更多树/聚落&分布
+    // 增加更多树
     for(let i=0; i<50; ++i){
         let x = Math.floor(Math.random()*(WORLD_W-7)+3), z = Math.floor(Math.random()*(WORLD_D-7)+3);
-        // 找地表
         let y;
         for(y=WORLD_H-3; y>2; --y) if([BLOCK.grass,BLOCK.dirt].includes(blocks[x][y][z]))break;
         if(y<4) continue;
-        // 树干
         let height = 3+Math.floor(noise.noise(x*0.20,z*0.21)*2.8);
         for(let h=1;h<=height;++h) blocks[x][y+h][z]=BLOCK.log;
-        // 树叶
         for(let lx=-2;lx<=2;++lx)
          for(let ly=Math.ceil(height/2);ly<=height+2;++ly)
           for(let lz=-2;lz<=2;++lz) {
@@ -110,11 +106,15 @@ function createWorld() {
 const gameState = {
     pointerLocked: false,
     showInfo: true,
-    px: WORLD_W/2, py: 20, pz: WORLD_D/2,
+    // 出生点放地图高处中心
+    px: WORLD_W/2,
+    py: Math.floor(WORLD_H*0.80),
+    pz: WORLD_D/2,
     vx: 0, vy: 0, vz: 0,
-    lookH: Math.PI/2, lookV: 0,
+    lookH: Math.PI / 2,
+    lookV: -0.30, // 稍微向下
     fly: false,
-    move: {w:0, a:0, s:0, d:0, up:0, down:0},
+    move: { w: 0, a: 0, s: 0, d: 0, up: 0, down: 0 },
     speed: 0.17,
     size: 0.6,
     blocks: createWorld(),
@@ -141,7 +141,7 @@ function setupThree() {
      for(let y=0;y<WORLD_H;++y)
       for(let z=0;z<WORLD_D;++z) {
        let id = gameState.blocks[x][y][z];
-       if(id!==null) addBlockMesh(x,y,z,id,false);
+       if(id!==null) addBlockMesh(x,y,z,id);
       }
 }
 
@@ -212,7 +212,6 @@ function stepPlayer() {
         gameState.vy -= 0.011;
         dy = gameState.vy;
     }
-
     let tryMove = (nx, ny, nz) => canStand(nx, ny, nz);
     if(tryMove(px+dx, py, pz)) px += dx;
     if(tryMove(px, py, pz+dz)) pz += dz;
@@ -239,7 +238,6 @@ function animate() {
 }
 
 // ================== 方块“挖掘/放置” ====================
-// 射线查找
 function raycastBlock(maxDist=6) {
     let ox = gameState.px, oy = gameState.py+0.6, oz = gameState.pz;
     let lx = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
