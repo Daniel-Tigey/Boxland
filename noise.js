@@ -67,7 +67,9 @@ function createWorld() {
                 0.40*noise.fbm(x/7+99, z/7-33, {octaves:1, gain:0.7, lacunarity:5.8})
             );
             let h = Math.floor(7 + 12 * base + 2.5*aux);
+            
             blocks[x][0][z]=BLOCK.bedrock;
+            blocks[x][1][z]=BLOCK.stone;
             for(let y=1; y<=h; ++y){
                 if(y<4 || (base>0.70 && y<h && y>16)) blocks[x][y][z]=BLOCK.stone;
                 else if(y<h) blocks[x][y][z]=BLOCK.dirt;
