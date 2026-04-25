@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>Boxland</title>
+    <style>
+        html, body { margin:0;padding:0; overflow:hidden; width:100vw; height:100vh; background:#111;}
+        #app { height:100vh; }
+        #info { position:fixed;top:0;left:0;background:rgba(0,0,0,0.7);color:#fff;padding:6px;font-size:15px;z-index:20; }
+        canvas { display:block;position:fixed;left:0;top:0;}
+    </style>
+</head>
+<body>
+<div id="app">
+  <div id="info" v-if="showInfo && !pointerLocked">
+    <b>WASD/空格/Shift</b> 移动 | <b>鼠标左/右</b> 挖掘/放置 | <b>鼠标</b> 转头 <br>
+    <b>F</b> 飞行 | <b>Esc</b> 退出游玩<br>
+    方块：草/土/石/水/树/基岩<br>
+    单击画面进入游戏
+  </div>
+</div>
+<script src="https://unpkg.com/vue@3"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
+<script src="noise.js"></script>
+</body>
+</html>
