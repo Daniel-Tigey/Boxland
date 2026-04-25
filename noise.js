@@ -47,29 +47,37 @@ class ValueNoise {
     }
 }
 
-// ================== 方块定义 ===================
+// ============ 方块定义与颜色 ============
 const BLOCK = {
-    grass: 0, dirt: 1, stone: 2, log: 3, leaf: 4,
-    water: 5, bedrock: 6, sand: 7, deepslate: 8
+    grass: 0, dirt: 1, stone: 2, wood: 3, leaf: 4,
+    water: 5, bedrock: 6, sand: 7, deep_stone: 8, lava: 9,
+    coal_mine: 10, copper_mine: 11, silver_mine: 12, platinum_mine: 13, diamond_mine: 14
 };
 const COLORS = [
     0x4CAF50, // grass
     0x8B5A2B, // dirt
     0x888888, // stone
-    0x8B4513, // log
+    0x8B4513, // wood
     0x19cc19, // leaf
     0x4091F7, // water
     0x000000, // bedrock
     0xDED39E, // sand
-    0x3A3A3A  // deepslate
+    0x3A3A3A, // deep_stone
+    0xEF0000, // lava
+    0x222222, // coal_mine (black)
+    0xF18D36, // copper_mine (copper/orange)
+    0xBFC7C7, // silver_mine (light grey)
+    0xc7bb80, // platinum_mine (yellow silver)
+    0x68e0ff  // diamond_mine (bright blue)
 ];
 
-// ================== 世界生成参数 ==================
+// ========== 世界参数 ============
 const WORLD_W = 64, WORLD_D = 64, WORLD_H = 48, SAND_THICK = 3;
 const noise = new ValueNoise(54188114514);
 
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
+// ========== 生成世界 ============
 function createWorld() {
     const blocks = [];
     for (let x = 0; x < WORLD_W; x++) {
@@ -81,82 +89,90 @@ function createWorld() {
             }
         }
     }
-
-    // ---------- 噪声参数和地表线 ----------
-    const waterLine = Math.floor(WORLD_H * 0.26); // ~12
-    const deepslateH = 8; // 深层石头自然层厚
-    const bedrockBase = 2; // 基岩最低层厚度
+    const waterLine = Math.floor(WORLD_H * 0.26);
+    const deepslateH = 8;
+    const bedrockBase = 2;
 
     for (let x = 0; x < WORLD_W; x++) {
         for (let z = 0; z < WORLD_D; z++) {
-            // 主地形 Fractal ValueNoise
+            // 地形主噪声
             let e = noise.fbm(x/30, z/30, {octaves:4, gain:0.55, lacunarity:2.1});
-            // 更起伏：加大幅度 + Worley引入大山沟（或洼地）
-            let worleyVal = 0.44 - noise.worley(x/32, z/32, 5); // 范围 [0,1], 低为山谷
+            let worleyVal = 0.44 - noise.worley(x/32, z/32, 5);
             let h0 = Math.floor(
                 WORLD_H * 0.2 +
                 Math.pow(e, 1.05) * WORLD_H * 0.55 +
                 worleyVal * WORLD_H * 0.25
             );
-            // 让山地、谷地落差更明显
             let h = clamp(h0, 5, WORLD_H-2);
 
-            // ---- 低于较低水位洼地全埋沙底、沙子厚度 SAND_THICK ----
-            // 三层底部一定概率为基岩（更自然结构），否则深层石头
-            for(let y=0; y<WORLD_H; ++y)
-                blocks[x][y][z] = null;
+            // 清空本柱
+            for(let y=0; y<WORLD_H; ++y) blocks[x][y][z] = null;
 
-            // 基岩（0~bedrockBase-1），随机化更像MC
+            // 基岩层
             for(let y=0; y<bedrockBase; ++y)
-                if(Math.random() < 0.66 || y==0)
-                    blocks[x][y][z] = BLOCK.bedrock;
+                if(Math.random()<0.66 || y==0)
+                    blocks[x][y][z]=BLOCK.bedrock;
                 else
-                    blocks[x][y][z] = BLOCK.deepslate;
+                    blocks[x][y][z]=BLOCK.deep_stone;
 
-            // 地表分层
+            // 地表分层与矿物
             for(let y=bedrockBase; y<=h; ++y){
-                let isLow = h < waterLine + 3; // 湖洋或洼地
+                let isLow = h < waterLine + 3;
                 // 水域沙底
-                if(isLow && y >= h-SAND_THICK+1)
+                if(isLow && y >= h-SAND_THICK+1) {
                     blocks[x][y][z] = BLOCK.sand;
+                    continue;
+                }
                 // 深层石头
-                else if(y < bedrockBase + deepslateH || (y < h-6 && h > waterLine+10 && Math.random()<0.25))
-                    blocks[x][y][z] = BLOCK.deepslate;
-                // 沙丘／洼地表层
-                else if(y >= h-SAND_THICK+1 && isLow)
+                if(y < bedrockBase + deepslateH || (y < h-6 && h > waterLine+10 && Math.random()<0.25)) {
+                    // ---- 矿石自然生成 in deep_stone ----
+                    let ore = randomOre(x, y, z);
+                    if(ore) blocks[x][y][z]=ore;
+                    else blocks[x][y][z]=BLOCK.deep_stone;
+                    continue;
+                }
+                // 沙丘／洼地
+                if(y >= h-SAND_THICK+1 && isLow) {
                     blocks[x][y][z] = BLOCK.sand;
+                    continue;
+                }
                 // 普通石头
-                else if(y < h-7)
-                    blocks[x][y][z] = BLOCK.stone;
+                if(y < h-7) {
+                    // ---- 矿石自然生成 in stone ----
+                    let ore = randomOre(x, y, z, 'stone');
+                    if(ore) blocks[x][y][z]=ore;
+                    else blocks[x][y][z]=BLOCK.stone;
+                    continue;
+                }
                 // 土
-                else if(y < h)
-                    blocks[x][y][z] = BLOCK.dirt;
+                if(y < h) {
+                    blocks[x][y][z]=BLOCK.dirt;
+                    continue;
+                }
                 // 顶层
-                else if(y == h) {
-                    if(isLow) blocks[x][y][z] = BLOCK.sand;
-                    else blocks[x][y][z] = BLOCK.grass;
+                if(y==h) {
+                    if(isLow) blocks[x][y][z]=BLOCK.sand;
+                    else blocks[x][y][z]=BLOCK.grass;
+                    continue;
                 }
             }
-
-            // 水体填洼地
-            if(h < waterLine-1) {
+            // 水体
+            if(h < waterLine-1)
                 for(let y=h+1; y<waterLine; ++y)
                     blocks[x][y][z] = BLOCK.water;
-            }
         }
     }
-
-    // ---- 树（高度再+1） ----
+    // 树（更高）
     for(let i=0; i<60; ++i){
         let x = Math.floor(Math.random()*(WORLD_W-7)+3), z = Math.floor(Math.random()*(WORLD_D-7)+3);
         let y;
         for(y=WORLD_H-5; y>2; --y)
-            if([BLOCK.grass,BLOCK.dirt].includes(blocks[x][y][z]) && blocks[x][y+1][z] == null)
+            if([BLOCK.grass,BLOCK.dirt].includes(blocks[x][y][z]) && blocks[x][y+1][z]==null)
                 break;
         if(y<4) continue;
-        let height = 4 + Math.floor(noise.noise(x*0.23,z*0.28)*2.8); // 比之前多+1
+        let height = 4 + Math.floor(noise.noise(x*0.23,z*0.28)*2.8);
         for(let h=1;h<=height;++h)
-            blocks[x][y+h][z]=BLOCK.log;
+            blocks[x][y+h][z]=BLOCK.wood;
         for(let lx=-2;lx<=2;++lx)
          for(let ly=Math.floor(height/2);ly<=height+2;++ly)
           for(let lz=-2;lz<=2;++lz) {
@@ -167,6 +183,28 @@ function createWorld() {
          }
     }
     return blocks;
+}
+
+// ====== 矿物分布控制函数 ======
+function randomOre(x, y, z, type='deep') {
+    // 可根据 y 深度分布概率
+    let r = Math.random();
+    // 深层石头产生概率较大；普通石头稀少
+    // y愈小，越深，越稀有矿几率越高
+    let stoneDepth = Math.max(1, y);
+
+    // 钻石
+    if(stoneDepth < 10 && r<0.012) return BLOCK.diamond_mine;
+    // 白金
+    if(stoneDepth < 14 && r<0.025) return BLOCK.platinum_mine;
+    // 银矿
+    if(stoneDepth < 16 && r<0.045) return BLOCK.silver_mine;
+    // 铜矿
+    if(stoneDepth < 22 && r<0.06) return BLOCK.copper_mine;
+    // 煤矿
+    if(r<0.10) return BLOCK.coal_mine;
+
+    return null;
 }
 
 const gameState = {
@@ -183,7 +221,7 @@ const gameState = {
 };
 window.gameState = gameState;
 
-// ================== ThreeJS 场景、动态渲染区块 ====================
+// ========== Three.js 渲染等保持不变 ==========
 let camera, scene, renderer, blockMeshes;
 function setupThree() {
     scene = new THREE.Scene();
@@ -242,21 +280,18 @@ window.addEventListener('resize',()=>{
     camera.updateProjectionMatrix();
 });
 
-// ================== 玩家视角 ====================
 function updateCamera() {
     camera.position.set(gameState.px, gameState.py, gameState.pz);
-    // FPS朝向，W前进=Z+
     let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
     let ly = Math.sin(gameState.lookV);
     let lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
     camera.lookAt(gameState.px + lx, gameState.py + ly, gameState.pz + lz);
 }
-
 function isSolid(x, y, z) {
     x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
     if(x<0||x>=WORLD_W||y<0||y>=WORLD_H||z<0||z>=WORLD_D) return true;
     let val = gameState.blocks[x][y][z];
-    return val!==null && val!==BLOCK.water && val!==BLOCK.leaf;
+    return val!==null && val!==BLOCK.water && val!==BLOCK.lava;
 }
 function canStand(nx, ny, nz) {
     let h = 1.64, r = 0.29;
@@ -270,10 +305,8 @@ function canStand(nx, ny, nz) {
 function stepPlayer() {
     let ang = gameState.lookH, speed = gameState.speed;
     let dx = 0, dz = 0;
-    // 前后
     if(gameState.move.w) { dx += Math.sin(ang)*speed; dz += Math.cos(ang)*speed; }
     if(gameState.move.s) { dx -= Math.sin(ang)*speed; dz -= Math.cos(ang)*speed; }
-    // 左右
     if(gameState.move.a) { dx += Math.sin(ang - Math.PI/2)*speed; dz += Math.cos(ang - Math.PI/2)*speed; }
     if(gameState.move.d) { dx += Math.sin(ang + Math.PI/2)*speed; dz += Math.cos(ang + Math.PI/2)*speed; }
     let px = gameState.px, py = gameState.py, pz = gameState.pz;
@@ -311,7 +344,6 @@ function animate() {
     renderer && renderer.render(scene, camera);
 }
 
-// ================== 方块交互 ====================
 function raycastBlock(maxDist=6) {
     let ox = gameState.px, oy = gameState.py+0.6, oz = gameState.pz;
     let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
@@ -330,7 +362,6 @@ function raycastBlock(maxDist=6) {
     }
     return null;
 }
-
 function onMousedown(e) {
     if (!gameState.pointerLocked) return;
     const hit = raycastBlock();
