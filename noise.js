@@ -1,8 +1,8 @@
-// --- ValueNoise + Fractal Brownian Motion 地形采样
+// --- ValueNoise + Worley分型地形 FBM/Worley Cellular Noise ----
 class ValueNoise {
-    constructor(seed = 1) {this.seed = seed;}
+    constructor(seed = 1) { this.seed = seed; }
     hash(x, y) {
-        let n = x * 374761393 + y * 668265263;
+        let n = x * 374761393 + y * 668265263 + this.seed * 31;
         n = (n ^ (n >> 13)) ^ this.seed;
         return (n & 255) / 255;
     }
@@ -24,14 +24,34 @@ class ValueNoise {
         for (let i = 0; i < octaves; ++i) {
             sum += this.noise(x * freq, y * freq) * amp;
             totalAmp += amp;
-            amp *= gain; freq *= lacunarity;
+            amp *= gain;
+            freq *= lacunarity;
         }
         return sum / totalAmp;
+    }
+    // Worley/Voronoi距离型元胞噪声（简单2D, 每单位格唯一随机点, 距离最近点的距离）
+    worley(x, y, cell_density=8) {
+        const ci = Math.floor(x * cell_density), cj = Math.floor(y * cell_density);
+        let minDist = 999;
+        for (let i = -1; i <= 1; i++)
+            for (let j = -1; j <= 1; j++) {
+                let seed = (ci + i) * 49632 + (cj + j) * 325176 + this.seed * 13337;
+                let fx = (ci + i) + (Math.sin(seed) * 43758.5453 % 1);
+                let fy = (cj + j) + (Math.cos(seed) * 12345.6789 % 1);
+                let dx = x * cell_density - fx;
+                let dy = y * cell_density - fy;
+                let dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < minDist) minDist = dist;
+            }
+        return Math.max(0, Math.min(minDist, 1));
     }
 }
 
 // ================== 方块定义 ===================
-const BLOCK = { grass:0, dirt:1, stone:2, log:3, leaf:4, water:5, bedrock:6 };
+const BLOCK = {
+    grass: 0, dirt: 1, stone: 2, log: 3, leaf: 4,
+    water: 5, bedrock: 6, sand: 7, deepslate: 8
+};
 const COLORS = [
     0x4CAF50, // grass
     0x8B5A2B, // dirt
@@ -39,13 +59,16 @@ const COLORS = [
     0x8B4513, // log
     0x19cc19, // leaf
     0x4091F7, // water
-    0x000000  // bedrock
+    0x000000, // bedrock
+    0xDED39E, // sand
+    0x3A3A3A  // deepslate
 ];
 
-// ================== 世界生成 ====================
-const WORLD_W = 64, WORLD_D = 64, WORLD_H = 28;
-const BLOCK_SIZE = 1;
+// ================== 世界生成参数 ==================
+const WORLD_W = 64, WORLD_D = 64, WORLD_H = 48, SAND_THICK = 3;
 const noise = new ValueNoise(54188114514);
+
+function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
 function createWorld() {
     const blocks = [];
@@ -58,39 +81,86 @@ function createWorld() {
             }
         }
     }
-    // 地形
+
+    // ---------- 噪声参数和地表线 ----------
+    const waterLine = Math.floor(WORLD_H * 0.26); // ~12
+    const deepslateH = 8; // 深层石头自然层厚
+    const bedrockBase = 2; // 基岩最低层厚度
+
     for (let x = 0; x < WORLD_W; x++) {
         for (let z = 0; z < WORLD_D; z++) {
-            let base = noise.fbm(x/40, z/40, {octaves:5, gain:0.46, lacunarity:2});
-            let aux = (
-                0.9 * noise.fbm(x/14+20, z/14-13, {octaves:2, gain:0.4, lacunarity:2.3}) + 
-                0.40*noise.fbm(x/7+99, z/7-33, {octaves:1, gain:0.7, lacunarity:5.8})
+            // 主地形 Fractal ValueNoise
+            let e = noise.fbm(x/30, z/30, {octaves:4, gain:0.55, lacunarity:2.1});
+            // 更起伏：加大幅度 + Worley引入大山沟（或洼地）
+            let worleyVal = 0.44 - noise.worley(x/32, z/32, 5); // 范围 [0,1], 低为山谷
+            let h0 = Math.floor(
+                WORLD_H * 0.2 +
+                Math.pow(e, 1.05) * WORLD_H * 0.55 +
+                worleyVal * WORLD_H * 0.25
             );
-            let h = Math.floor(7 + 12 * base + 2.5*aux);
-            
-            blocks[x][0][z]=BLOCK.bedrock;
-            blocks[x][1][z]=BLOCK.stone;
-            for(let y=1; y<=h; ++y){
-                if(y<4 || (base>0.70 && y<h && y>16)) blocks[x][y][z]=BLOCK.stone;
-                else if(y<h) blocks[x][y][z]=BLOCK.dirt;
-                else blocks[x][y][z]=BLOCK.grass;
+            // 让山地、谷地落差更明显
+            let h = clamp(h0, 5, WORLD_H-2);
+
+            // ---- 低于较低水位洼地全埋沙底、沙子厚度 SAND_THICK ----
+            // 三层底部一定概率为基岩（更自然结构），否则深层石头
+            for(let y=0; y<WORLD_H; ++y)
+                blocks[x][y][z] = null;
+
+            // 基岩（0~bedrockBase-1），随机化更像MC
+            for(let y=0; y<bedrockBase; ++y)
+                if(Math.random() < 0.66 || y==0)
+                    blocks[x][y][z] = BLOCK.bedrock;
+                else
+                    blocks[x][y][z] = BLOCK.deepslate;
+
+            // 地表分层
+            for(let y=bedrockBase; y<=h; ++y){
+                let isLow = h < waterLine + 3; // 湖洋或洼地
+                // 水域沙底
+                if(isLow && y >= h-SAND_THICK+1)
+                    blocks[x][y][z] = BLOCK.sand;
+                // 深层石头
+                else if(y < bedrockBase + deepslateH || (y < h-6 && h > waterLine+10 && Math.random()<0.25))
+                    blocks[x][y][z] = BLOCK.deepslate;
+                // 沙丘／洼地表层
+                else if(y >= h-SAND_THICK+1 && isLow)
+                    blocks[x][y][z] = BLOCK.sand;
+                // 普通石头
+                else if(y < h-7)
+                    blocks[x][y][z] = BLOCK.stone;
+                // 土
+                else if(y < h)
+                    blocks[x][y][z] = BLOCK.dirt;
+                // 顶层
+                else if(y == h) {
+                    if(isLow) blocks[x][y][z] = BLOCK.sand;
+                    else blocks[x][y][z] = BLOCK.grass;
+                }
             }
-            let wl = 12;
-            if(h<wl-1) for(let y=h+1; y<wl; ++y) blocks[x][y][z]=BLOCK.water;
+
+            // 水体填洼地
+            if(h < waterLine-1) {
+                for(let y=h+1; y<waterLine; ++y)
+                    blocks[x][y][z] = BLOCK.water;
+            }
         }
     }
-    // 树：干最矮2
-    for(let i=0; i<50; ++i){
+
+    // ---- 树（高度再+1） ----
+    for(let i=0; i<60; ++i){
         let x = Math.floor(Math.random()*(WORLD_W-7)+3), z = Math.floor(Math.random()*(WORLD_D-7)+3);
         let y;
-        for(y=WORLD_H-3; y>2; --y) if([BLOCK.grass,BLOCK.dirt].includes(blocks[x][y][z]))break;
+        for(y=WORLD_H-5; y>2; --y)
+            if([BLOCK.grass,BLOCK.dirt].includes(blocks[x][y][z]) && blocks[x][y+1][z] == null)
+                break;
         if(y<4) continue;
-        let height = 2 + Math.floor(noise.noise(x*0.20,z*0.21)*2.8);
-        for(let h=1;h<=height;++h) blocks[x][y+h][z]=BLOCK.log;
+        let height = 4 + Math.floor(noise.noise(x*0.23,z*0.28)*2.8); // 比之前多+1
+        for(let h=1;h<=height;++h)
+            blocks[x][y+h][z]=BLOCK.log;
         for(let lx=-2;lx<=2;++lx)
-         for(let ly=Math.ceil(height/2);ly<=height+2;++ly)
+         for(let ly=Math.floor(height/2);ly<=height+2;++ly)
           for(let lz=-2;lz<=2;++lz) {
-            if(Math.abs(lx)+Math.abs(lz)>3||(lx===0&&ly===Math.ceil(height/2)&&lz===0)) continue;
+            if(Math.abs(lx)+Math.abs(lz)>3||(lx===0&&ly===Math.floor(height/2)&&lz===0)) continue;
             let tx=x+lx, ty=y+ly, tz=z+lz;
             if(tx<0||ty>=WORLD_H||tz<0||tx>=WORLD_W||tz>=WORLD_D) continue;
             if(blocks[tx][ty][tz]==null) blocks[tx][ty][tz]=BLOCK.leaf;
@@ -103,7 +173,7 @@ const gameState = {
     pointerLocked: false, showInfo: true,
     px: WORLD_W/2, py: Math.floor(WORLD_H*0.80), pz: WORLD_D/2,
     vx: 0, vy: 0, vz: 0,
-    lookH: Math.PI / 2,     // 向 X 正方向
+    lookH: Math.PI / 2,
     lookV: -0.30,
     fly: false,
     move: { w: 0, a: 0, s: 0, d: 0, up: 0, down: 0 },
@@ -118,7 +188,7 @@ let camera, scene, renderer, blockMeshes;
 function setupThree() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x81D4FA);
-    camera = new THREE.PerspectiveCamera(82, window.innerWidth/window.innerHeight, 0.1, 1200);
+    camera = new THREE.PerspectiveCamera(82, window.innerWidth/window.innerHeight, 0.1, 1600);
     renderer = new THREE.WebGLRenderer({antialias:true});
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.domElement.style.zIndex=5;
@@ -129,12 +199,9 @@ function setupThree() {
     renderVisibleBlocks();
 }
 
-// 渲染距离摄像机 16 格内的方块，超出即时卸载
 function renderVisibleBlocks() {
     const RENDER_DIST = 16;
     let camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
-
-    // 渲染区块
     for(let x=0;x<WORLD_W;++x)
      for(let y=0;y<WORLD_H;++y)
       for(let z=0;z<WORLD_D;++z) {
@@ -155,14 +222,13 @@ function renderVisibleBlocks() {
 
 function addBlockMesh(x, y, z, id) {
     let color = COLORS[id]||0xff00ff;
-    let geometry = new THREE.BoxGeometry(BLOCK_SIZE,BLOCK_SIZE,BLOCK_SIZE);
+    let geometry = new THREE.BoxGeometry(1,1,1);
     let material = new THREE.MeshLambertMaterial({color});
     let mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(x,y,z);
     scene.add(mesh);
     blockMeshes.set(`${x}_${y}_${z}`, mesh);
 }
-
 function removeBlockMesh(x, y, z) {
     let key = `${x}_${y}_${z}`;
     let mesh = blockMeshes.get(key);
@@ -179,21 +245,19 @@ window.addEventListener('resize',()=>{
 // ================== 玩家视角 ====================
 function updateCamera() {
     camera.position.set(gameState.px, gameState.py, gameState.pz);
-    // 正确的第一人称视角
-    let lx = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
+    // FPS朝向，W前进=Z+
+    let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
     let ly = Math.sin(gameState.lookV);
-    let lz = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
-    camera.lookAt(gameState.px+lx, gameState.py+ly, gameState.pz+lz);
+    let lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
+    camera.lookAt(gameState.px + lx, gameState.py + ly, gameState.pz + lz);
 }
 
-// ============ 碰撞系统，落地自动弹出纠偏 =============
 function isSolid(x, y, z) {
     x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
     if(x<0||x>=WORLD_W||y<0||y>=WORLD_H||z<0||z>=WORLD_D) return true;
     let val = gameState.blocks[x][y][z];
     return val!==null && val!==BLOCK.water && val!==BLOCK.leaf;
 }
-
 function canStand(nx, ny, nz) {
     let h = 1.64, r = 0.29;
     for(let y=ny-0.8; y<ny+h; y+=0.38)
@@ -203,17 +267,15 @@ function canStand(nx, ny, nz) {
     }
     return true;
 }
-
-// ================== 玩家物理&反卡死移动 ====================
 function stepPlayer() {
     let ang = gameState.lookH, speed = gameState.speed;
     let dx = 0, dz = 0;
     // 前后
-    if(gameState.move.w) { dx += Math.cos(ang)*speed; dz += Math.sin(ang)*speed; }
-    if(gameState.move.s) { dx -= Math.cos(ang)*speed; dz -= Math.sin(ang)*speed; }
+    if(gameState.move.w) { dx += Math.sin(ang)*speed; dz += Math.cos(ang)*speed; }
+    if(gameState.move.s) { dx -= Math.sin(ang)*speed; dz -= Math.cos(ang)*speed; }
     // 左右
-    if(gameState.move.a) { dx += Math.cos(ang - Math.PI/2)*speed; dz += Math.sin(ang - Math.PI/2)*speed; }
-    if(gameState.move.d) { dx += Math.cos(ang + Math.PI/2)*speed; dz += Math.sin(ang + Math.PI/2)*speed; }
+    if(gameState.move.a) { dx += Math.sin(ang - Math.PI/2)*speed; dz += Math.cos(ang - Math.PI/2)*speed; }
+    if(gameState.move.d) { dx += Math.sin(ang + Math.PI/2)*speed; dz += Math.cos(ang + Math.PI/2)*speed; }
     let px = gameState.px, py = gameState.py, pz = gameState.pz;
     let dy = 0;
     if(gameState.fly){
@@ -223,12 +285,9 @@ function stepPlayer() {
         gameState.vy -= 0.011;
         dy = gameState.vy;
     }
-
-    // 物理碰撞&地面弹出：先Y
     if(canStand(px, py+dy, pz)) {
         py += dy;
     } else {
-        // 如果掉进方块，用最小步进尝试踢出
         let maxTry = 8, found = false, newY = py;
         for(let t=0;t<=maxTry;++t) {
             if(canStand(px, py+t*0.1, pz)) { newY=py+t*0.1; found=true; break; }
@@ -236,20 +295,14 @@ function stepPlayer() {
         if(found) py = newY;
         gameState.vy = 0;
     }
-
-    // X方向
     if(canStand(px+dx, py, pz)) px += dx;
-    // Z方向
     if(canStand(px, py, pz+dz)) pz += dz;
-
-    // 越界保护
     px = Math.max(1, Math.min(WORLD_W-2, px));
     py = Math.max(2, Math.min(WORLD_H-2, py));
     pz = Math.max(1, Math.min(WORLD_D-2, pz));
     Object.assign(gameState, {px,py,pz});
 }
 
-// ================== 游戏主循环渲染 ====================
 function animate() {
     requestAnimationFrame(animate);
     stepPlayer();
@@ -258,12 +311,12 @@ function animate() {
     renderer && renderer.render(scene, camera);
 }
 
-// ================== 方块射线、交互 ====================
+// ================== 方块交互 ====================
 function raycastBlock(maxDist=6) {
     let ox = gameState.px, oy = gameState.py+0.6, oz = gameState.pz;
-    let lx = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
+    let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
     let ly = Math.sin(gameState.lookV);
-    let lz = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
+    let lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
     for(let i=0;i<maxDist*15;i++) {
         let d = i*0.07;
         let x = ox+lx*d, y = oy+ly*d, z = oz+lz*d;
@@ -302,7 +355,6 @@ function onMousedown(e) {
 }
 function onContextMenu(e) { e.preventDefault(); }
 
-// ================== 键鼠、飞行、视角 ====================
 function setupInput() {
     renderer.domElement.addEventListener('click',()=>{
         renderer.domElement.requestPointerLock();
@@ -314,7 +366,6 @@ function setupInput() {
     });
     document.addEventListener('mousemove',e=>{
         if(!gameState.pointerLocked)return;
-        // 正确视角控制：左右增加，抬头为lookV减小
         gameState.lookH += e.movementX * 0.002;
         gameState.lookV -= e.movementY * 0.002;
         let V=Math.PI/2*0.99;
@@ -346,7 +397,6 @@ function setupInput() {
     window.addEventListener('contextmenu',onContextMenu);
 }
 
-// ================== Vue界面 ====================
 const {createApp} = Vue;
 createApp({
   setup() {
