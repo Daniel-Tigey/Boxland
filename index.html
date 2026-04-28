@@ -17,6 +17,7 @@
             letter-spacing: 0.08em;
             margin-bottom: 0.2em;
             margin-top: 0;
+            text-shadow:0 2px 16px #0008;
         }
         .subtitle {
             font-size: 1.7em;
@@ -24,33 +25,53 @@
             margin-bottom: 1.2em;
             text-shadow: 0 2px 8px #0009;
         }
-        .start-btn {
+        .main-btn, .start-btn, .setting-btn {
             background: linear-gradient(90deg,#388e3c,#81c784);
             color:#222; border-radius: 1.8em; border:none;
             padding: 1em 3em; font-size:2em; cursor:pointer;
             font-family: inherit; font-weight:bold;
-            margin-top:1.8em;
+            margin-top:1.4em;
+            margin-right:1.4em;
             transition:background 0.2s, box-shadow 0.2s;
             box-shadow:0 8px 18px #31514e60;
+            display:inline-block;
         }
-        .start-btn:hover { background:#aed581; color:#333; box-shadow:0 7px 40px #31514e90; }
+        .main-btn.setting-btn {
+            background: linear-gradient(90deg,#1565c0,#81acf7);
+            margin-right: 0;
+        }
+        .main-btn:hover, .start-btn:hover, .setting-btn:hover {
+            background:#aed581; color:#333; box-shadow:0 7px 40px #31514e90;
+        }
         .author { opacity:.83; margin-top: 2.8em; font-size:1.15em; color:#eee;}
         .tips {
             margin-top:1.8em; font-size:1em; color:#f6f6f670;
             font-family:consolas,monospace;}
         a { color:inherit;text-decoration:none;}
+        @media (max-width:560px) {
+            .title { font-size:2.2em;}
+            .subtitle { font-size:1.05em;}
+            .main-btn, .start-btn, .setting-btn { font-size:1.17em; padding:9px 1.2em;}
+        }
     </style>
 </head>
 <body>
 <div class="home-root">
     <div>
         <div class="title">Boxland</div>
-        <div class="subtitle">三维沙盒复刻 · Minecraft简易网页版</div>
-        <button class="start-btn" onclick="location.href='game.html'">进入游戏</button>
+        <div class="subtitle">沙盒游戏</div>
+        <button class="main-btn start-btn" onclick="location.href='game.html'">进入游戏</button>
+        <button class="main-btn setting-btn" onclick="goSettings()">设置</button>
         <div class="tips">建议电脑端游玩 · 推荐Chrome/Edge/Firefox</div>
         <div class="author">作者：<a href="https://github.com/Daniel-Tigey" target="_blank">Daniel-Tigey</a>
-            | Powered by Three.js + Vue + Copilot</div>
+        </div>
     </div>
 </div>
+<script>
+function goSettings() {
+    // 如果有独立设置页，修改此处跳转（如 'settings.html'）
+    alert('暂未开放设置页，敬请期待！');
+}
+</script>
 </body>
 </html>
