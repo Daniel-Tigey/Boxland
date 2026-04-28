@@ -1,1 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>Boxland 设置</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+      body { background:linear-gradient(135deg,#7bb5dd,#cfe86b 80%); color:#222; margin:0; font-family:"微软雅黑",arial,sans-serif;}
+      .panel {
+        background:#fff; margin:40px auto 20px auto; border-radius:18px;
+        max-width:430px; box-shadow:0 4px 40px #8886;
+        padding:32px 28px 26px 28px;
+      }
+      h2 { margin:0 0 24px 0; font-size:2.1em; text-align:center; color:#277;}
+      .slider-row {
+        margin-bottom:30px;
+      }
+      .slider-label {
+        font-size:1.13em; font-weight:bold;
+      }
+      .slider {
+        width:70%; max-width:280px;
+        margin-top:7px; margin-bottom:5px;
+      }
+      .distance-warning {
+        color:#b82d39; background:#fff2ef; padding:7px 13px; border-radius:7px; margin-top:6px;
+        font-size:.98em;
+      }
+      .keymap-table {
+        width:100%; border-collapse:collapse; margin-bottom:18px;
+      }
+      .keymap-table td, .keymap-table th {
+        padding:6px 6px;
+        font-size:1.05em;
+      }
+      .keymap-table th {
+        color:#227;
+        border-bottom:2px solid #2378ad63;
+      }
+      .key-cell {
+        text-align:center;
+        background:#e6e5ef;
+        border-radius:6px;
+        cursor:pointer;
+        font-weight:bold;
+        transition: background .13s;
+        border:1.5px solid #aaccc9;
+      }
+      .key-cell.editing {
+        background:#bbf7d0;
+        color:#186963;
+        outline:2.5px solid #59d3c0;
+      }
+      .btn-row { text-align:center; }
+      .btn {
+        display:inline-block;
+        margin:7px 9px;
+        padding:8px 28px;
+        background:linear-gradient(90deg,#388e3c,#81c784);
+        border:none; border-radius:2em;
+        font-size:1.12em; font-weight:bold; color:#222;
+        box-shadow:0 2px 11px #21321430;
+        cursor:pointer;
+        transition:.15s background,.15s color;
+      }
+      .btn:hover { background:#aed581; color:#666;}
+      @media (max-width:520px) {
+        .panel { padding:17px 6px 18px 6px; max-width:none; }
+        .keymap-table th, .keymap-table td { font-size:.99em;}
+      }
+    </style>
+</head>
+<body>
+<div class="panel">
+  <h2>Boxland 设置</h2>
+  <form id="settingsForm" onsubmit="return false;">
 
+    <div class="slider-row">
+      <div class="slider-label">方块渲染距离：<span id="dist-val"></span></div>
+      <input id="dist-slider" class="slider" type="range" min="3" max="32" value="16">
+      <div style="margin-top:.3em;">
+        <span style="color:#388e3c">越大，视野越远，性能要求越高。</span>
+      </div>
+      <div class="distance-warning" id="dist-warn" style="display:none;">
+        ⚠ 渲染距离大于22可能会导致卡顿/爆显存！建议8G内存以下电脑不要超过22。
+      </div>
+    </div>
+
+    <div style="margin:16px 0 4px 0; font-weight:bold; color:#28568b;">按键控制</div>
+    <table class="keymap-table" id="keymap-table">
+      <tr>
+        <th>操作</th><th>按键</th>
+      </tr>
+    </table>
+    <div class="btn-row">
+      <button class="btn" type="button" onclick="saveSettings()">保存并返回游戏</button>
+      <button class="btn" type="button" onclick="resetToDefault()">恢复默认</button>
+    </div>
+  </form>
+  <div style="margin:20px 0 6px 0;text-align:center;">
+    <a href="game.html" style="color:#2d7c5d; font-size:1em;text-decoration:underline;">返回游戏页面</a>
+  </div>
+</div>
+<script>
+/** ---- 1. 默认设置 ---- */
+const DEFAULTS = {
+  renderDistance: 16,
+  keymap: {
+    forward: 'KeyW',
+    back:    'KeyS',
+    left:    'KeyA',
+    right:   'KeyD',
+    jump:    'Space',
+    sneak:   'ShiftLeft',
+    fly:     'KeyF',
+    inv:     'KeyE',
+    hotbar1: 'Digit1',
+    hotbar2: 'Digit2',
+    hotbar3: 'Digit3',
+    hotbar4: 'Digit4',
+    hotbar5: 'Digit5',
+    hotbar6: 'Digit6',
+    hotbar7: 'Digit7',
+    hotbar8: 'Digit8'
+  }
+};
+const KEY_LABELS = {
+  forward: "前进",
+  back:    "后退",
+  left:    "左移",
+  right:   "右移",
+  jump:    "跳跃",
+  sneak:   "下潜/降落",
+  fly:     "切换飞行",
+  inv:     "打开物品栏",
+  hotbar1:"物品1", hotbar2:"物品2", hotbar3:"物品3",
+  hotbar4:"物品4", hotbar5:"物品5", hotbar6:"物品6",
+  hotbar7:"物品7", hotbar8:"物品8"
+};
+const KEY_ORDER = [
+  "forward","back","left","right","jump","sneak","fly","inv",
+  "hotbar1","hotbar2","hotbar3","hotbar4","hotbar5","hotbar6","hotbar7","hotbar8"
+];
+
+function getSettings() {
+  let dist = Number(localStorage.getItem('renderDistance'));
+  if(!Number.isFinite(dist)) dist = DEFAULTS.renderDistance;
+  let keymapRaw = localStorage.getItem('keymap');
+  let keymap = {...DEFAULTS.keymap};
+  if(keymapRaw) {
+    try { Object.assign(keymap, JSON.parse(keymapRaw)); }catch{}
+  }
+  return { renderDistance:dist, keymap };
+}
+function saveSettings() {
+  localStorage.setItem('renderDistance', document.getElementById('dist-slider').value);
+  localStorage.setItem('keymap', JSON.stringify(currKeymap));
+  alert("设置已保存！将跳转回游戏...");
+  location.href = 'game.html';
+}
+function resetToDefault() {
+  if(!confirm("是否恢复所有按键和渲染距离为默认？")) return;
+  loadSettings(DEFAULTS.renderDistance, {...DEFAULTS.keymap});
+  saveSettings();
+}
+function codeToLabel(code) {
+  if(code.startsWith('Key')) return code.slice(3);
+  if(code.startsWith('Digit')) return code.slice(5);
+  if(code=="Space") return "空格";
+  if(code=="ShiftLeft") return "Shift";
+  if(code=="KeyF") return "F";
+  if(code=="KeyE") return "E";
+  return code;
+}
+
+/* ---- 2. 渲染距离 ---- */
+const distSlider = document.getElementById("dist-slider");
+const distVal = document.getElementById("dist-val");
+const distWarn = document.getElementById("dist-warn");
+distSlider.addEventListener("input", function() {
+  distVal.textContent = this.value;
+  distWarn.style.display = (Number(this.value)>22)?"block":"none";
+});
+
+/* ---- 3. 按键设置组件 ---- */
+const keyTable = document.getElementById("keymap-table");
+let currKeymap = {...DEFAULTS.keymap};
+let currEditing = null;
+function renderKeyTable() {
+  // 清空非表头
+  keyTable.querySelectorAll("tr:not(:first-child)").forEach(x=>x.remove());
+  for(const k of KEY_ORDER) {
+    const tr = document.createElement('tr');
+    const tdName = document.createElement('td');
+    tdName.textContent = KEY_LABELS[k];
+    const tdKey = document.createElement('td');
+    tdKey.className = "key-cell"+(currEditing===k?" editing":"");
+    tdKey.tabIndex=0;
+    tdKey.dataset.keyid = k;
+    tdKey.textContent = codeToLabel(currKeymap[k]);
+    tdKey.onclick = ()=>beginEditKey(k, tdKey);
+    tdKey.onkeydown = e=>{
+      e.preventDefault();
+      if(currEditing) handleKeySet(e.code);
+    }
+    tr.appendChild(tdName); tr.appendChild(tdKey);
+    keyTable.appendChild(tr);
+  }
+}
+function beginEditKey(keyid, cell) {
+  if(currEditing) return;
+  currEditing = keyid;
+  cell.classList.add("editing");
+  cell.textContent = "请按新键";
+  cell.focus();
+  document.addEventListener("keydown", keyListener);
+}
+function handleKeySet(newCode){
+  if(!currEditing) return;
+  // 检查重复
+  for(const k in currKeymap)
+    if(currKeymap[k]===newCode) {
+      alert("该按键已被其它功能占用，请选择其它键！");
+      return;
+    }
+  currKeymap[currEditing] = newCode;
+  currEditing = null;
+  renderKeyTable();
+  document.removeEventListener("keydown", keyListener);
+}
+function keyListener(e){ e.preventDefault(); handleKeySet(e.code); }
+function loadSettings(dist, keymap){
+  distSlider.value = dist;
+  distVal.textContent = dist;
+  distWarn.style.display = (Number(dist)>22)?"block":"none";
+  currKeymap = {...keymap};
+  currEditing = null;
+  renderKeyTable();
+}
+
+/* ---- 4. 初始化 ---- */
+const s = getSettings();
+loadSettings(s.renderDistance, s.keymap);
+</script>
+</body>
+</html>
