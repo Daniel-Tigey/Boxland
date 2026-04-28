@@ -29,7 +29,6 @@ class ValueNoise {
         }
         return sum / totalAmp;
     }
-    // Worley/Voronoi距离型元胞噪声（简单2D, 每单位格唯一随机点, 距离最近点的距离）
     worley(x, y, cell_density=8) {
         const ci = Math.floor(x * cell_density), cj = Math.floor(y * cell_density);
         let minDist = 999;
@@ -47,7 +46,7 @@ class ValueNoise {
     }
 }
 
-// ============ 方块定义与颜色 ============
+// ===== 方块与颜色，支持矿物栏位 =====
 const BLOCK = {
     grass: 0, dirt: 1, stone: 2, wood: 3, leaf: 4,
     water: 5, bedrock: 6, sand: 7, deep_stone: 8, lava: 9,
@@ -64,11 +63,16 @@ const COLORS = [
     0xDED39E, // sand
     0x3A3A3A, // deep_stone
     0xEF0000, // lava
-    0x222222, // coal_mine (black)
-    0xF18D36, // copper_mine (copper/orange)
-    0xBFC7C7, // silver_mine (light grey)
-    0xc7bb80, // platinum_mine (yellow silver)
-    0x68e0ff  // diamond_mine (bright blue)
+    0x222222, // coal_mine
+    0xF18D36, // copper_mine
+    0xBFC7C7, // silver_mine
+    0xc7bb80, // platinum_mine
+    0x68e0ff  // diamond_mine
+];
+
+const BLOCKNAMES = [
+    "草", "土", "石", "木", "叶", "水", "基岩", "沙", "深石",
+    "岩浆", "煤矿", "铜矿", "银矿", "白金", "钻石"
 ];
 
 // ========== 世界参数 ============
@@ -77,7 +81,6 @@ const noise = new ValueNoise(54188114514);
 
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
-// ========== 生成世界 ============
 function createWorld() {
     const blocks = [];
     for (let x = 0; x < WORLD_W; x++) {
@@ -95,7 +98,6 @@ function createWorld() {
 
     for (let x = 0; x < WORLD_W; x++) {
         for (let z = 0; z < WORLD_D; z++) {
-            // 地形主噪声
             let e = noise.fbm(x/30, z/30, {octaves:4, gain:0.55, lacunarity:2.1});
             let worleyVal = 0.44 - noise.worley(x/32, z/32, 5);
             let h0 = Math.floor(
@@ -105,64 +107,43 @@ function createWorld() {
             );
             let h = clamp(h0, 5, WORLD_H-2);
 
-            // 清空本柱
             for(let y=0; y<WORLD_H; ++y) blocks[x][y][z] = null;
 
-            // 基岩层
             for(let y=0; y<bedrockBase; ++y)
                 if(Math.random()<0.66 || y==0)
                     blocks[x][y][z]=BLOCK.bedrock;
                 else
                     blocks[x][y][z]=BLOCK.deep_stone;
 
-            // 地表分层与矿物
             for(let y=bedrockBase; y<=h; ++y){
                 let isLow = h < waterLine + 3;
-                // 水域沙底
-                if(isLow && y >= h-SAND_THICK+1) {
-                    blocks[x][y][z] = BLOCK.sand;
-                    continue;
-                }
-                // 深层石头
+                if(isLow && y >= h-SAND_THICK+1) { blocks[x][y][z]=BLOCK.sand; continue; }
                 if(y < bedrockBase + deepslateH || (y < h-6 && h > waterLine+10 && Math.random()<0.25)) {
-                    // ---- 矿石自然生成 in deep_stone ----
                     let ore = randomOre(x, y, z);
                     if(ore) blocks[x][y][z]=ore;
                     else blocks[x][y][z]=BLOCK.deep_stone;
                     continue;
                 }
-                // 沙丘／洼地
-                if(y >= h-SAND_THICK+1 && isLow) {
-                    blocks[x][y][z] = BLOCK.sand;
-                    continue;
-                }
-                // 普通石头
+                if(y >= h-SAND_THICK+1 && isLow) { blocks[x][y][z]=BLOCK.sand; continue; }
                 if(y < h-7) {
-                    // ---- 矿石自然生成 in stone ----
                     let ore = randomOre(x, y, z, 'stone');
                     if(ore) blocks[x][y][z]=ore;
                     else blocks[x][y][z]=BLOCK.stone;
                     continue;
                 }
-                // 土
-                if(y < h) {
-                    blocks[x][y][z]=BLOCK.dirt;
-                    continue;
-                }
-                // 顶层
+                if(y < h) { blocks[x][y][z]=BLOCK.dirt; continue; }
                 if(y==h) {
                     if(isLow) blocks[x][y][z]=BLOCK.sand;
                     else blocks[x][y][z]=BLOCK.grass;
                     continue;
                 }
             }
-            // 水体
             if(h < waterLine-1)
                 for(let y=h+1; y<waterLine; ++y)
                     blocks[x][y][z] = BLOCK.water;
         }
     }
-    // 树（更高）
+    // 树
     for(let i=0; i<60; ++i){
         let x = Math.floor(Math.random()*(WORLD_W-7)+3), z = Math.floor(Math.random()*(WORLD_D-7)+3);
         let y;
@@ -184,29 +165,23 @@ function createWorld() {
     }
     return blocks;
 }
-
-// ====== 矿物分布控制函数 ======
+// ====== 矿物分布函数 ======
 function randomOre(x, y, z, type='deep') {
-    // 可根据 y 深度分布概率
     let r = Math.random();
-    // 深层石头产生概率较大；普通石头稀少
-    // y愈小，越深，越稀有矿几率越高
     let stoneDepth = Math.max(1, y);
-
-    // 钻石
     if(stoneDepth < 10 && r<0.012) return BLOCK.diamond_mine;
-    // 白金
     if(stoneDepth < 14 && r<0.025) return BLOCK.platinum_mine;
-    // 银矿
     if(stoneDepth < 16 && r<0.045) return BLOCK.silver_mine;
-    // 铜矿
     if(stoneDepth < 22 && r<0.06) return BLOCK.copper_mine;
-    // 煤矿
     if(r<0.10) return BLOCK.coal_mine;
-
     return null;
 }
 
+const HOTBAR_SIZE=8;
+const DEFAULT_HOTBAR = [
+    BLOCK.grass, BLOCK.dirt, BLOCK.stone, BLOCK.sand,
+    BLOCK.wood, BLOCK.leaf, BLOCK.deep_stone, BLOCK.coal_mine
+];
 const gameState = {
     pointerLocked: false, showInfo: true,
     px: WORLD_W/2, py: Math.floor(WORLD_H*0.80), pz: WORLD_D/2,
@@ -218,10 +193,13 @@ const gameState = {
     speed: 0.17,
     size: 0.6,
     blocks: createWorld(),
+    // ==== 物品栏 ====
+    hotbar: DEFAULT_HOTBAR.slice(),
+    selectedSlot: 0
 };
 window.gameState = gameState;
 
-// ========== Three.js 渲染等保持不变 ==========
+// ========== Three.js 场景 ==========
 let camera, scene, renderer, blockMeshes;
 function setupThree() {
     scene = new THREE.Scene();
@@ -257,7 +235,6 @@ function renderVisibleBlocks() {
         }
       }
 }
-
 function addBlockMesh(x, y, z, id) {
     let color = COLORS[id]||0xff00ff;
     let geometry = new THREE.BoxGeometry(1,1,1);
@@ -379,8 +356,9 @@ function onMousedown(e) {
            && Math.abs(px-gameState.px)>0.7
            && Math.abs(py-gameState.py)>1.0
            && Math.abs(pz-gameState.pz)>0.7 ){
-            gameState.blocks[px][py][pz]=BLOCK.grass;
-            addBlockMesh(px,py,pz,BLOCK.grass);
+            let id = gameState.hotbar[gameState.selectedSlot];
+            gameState.blocks[px][py][pz]=id;
+            addBlockMesh(px,py,pz,id);
         }
     }
 }
@@ -403,7 +381,13 @@ function setupInput() {
         if(gameState.lookV<-V)gameState.lookV=-V;
         if(gameState.lookV>V)gameState.lookV=V;
     });
+    // 数字键1~8切换物品栏
     window.addEventListener('keydown',e=>{
+        // 热键栏选择
+        if(/^Digit[1-8]$/.test(e.code)){
+            gameState.selectedSlot = Number(e.code.slice(-1)) - 1;
+        }
+        // 原有移动
         if(e.code==='KeyW')gameState.move.w=1;
         if(e.code==='KeyA')gameState.move.a=1;
         if(e.code==='KeyS')gameState.move.s=1;
@@ -424,21 +408,79 @@ function setupInput() {
         if(e.code==='Space')gameState.move.up=0;
         if(e.code==='ShiftLeft')gameState.move.down=0;
     });
+    // 鼠标滚轮切换选中物品栏
+    window.addEventListener('wheel',e=>{
+        let sz = gameState.hotbar.length;
+        if(sz>0) {
+            if(e.deltaY>0) gameState.selectedSlot = (gameState.selectedSlot+1)%sz;
+            if(e.deltaY<0) gameState.selectedSlot = (gameState.selectedSlot+sz-1)%sz;
+            e.preventDefault();
+        }
+    },{passive:false});
     window.addEventListener('mousedown',onMousedown);
     window.addEventListener('contextmenu',onContextMenu);
 }
 
+// ========= 热键栏UI =========
+function blockName(id) {
+    let idx = Object.values(BLOCK).indexOf(id);
+    return BLOCKNAMES[idx] || "未知";
+}
+
+// Vue界面
 const {createApp} = Vue;
 createApp({
   setup() {
       return {
         pointerLocked: Vue.computed(()=>gameState.pointerLocked),
         showInfo: Vue.computed(()=>gameState.showInfo),
+        hotbar: Vue.computed(()=>gameState.hotbar),
+        selectedSlot: Vue.computed(()=>gameState.selectedSlot),
+        COLORS,
+        blockName
       }
   },
   mounted() {
       setupThree();
       setupInput();
       animate();
-  }
+  },
+  template: `
+  <div>
+    <slot></slot>
+    <div v-if="showInfo && !pointerLocked"
+         style="position:fixed;top:0;left:0;background:rgba(0,0,0,0.7);color:#fff;padding:6px 20px;font-size:15px;z-index:20;">
+        <b>WASD/空格/Shift</b> 移动 | <b>鼠标左/右</b> 挖掘/放置 | <b>鼠标</b> 转头 <br>
+        <b>1-8</b>/滚轮快速切换物品栏 &nbsp; <b>F</b>飞行 &nbsp; <b>Esc</b> 退出 <br>
+        单击画面进入游戏
+    </div>
+    <div style="position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:25;display:flex;gap:8px;">
+      <div v-for="(bid,i) in hotbar"
+           :key="i"
+           :style="{
+            width:'42px',height:'42px',
+            margin:'0 3px',position:'relative',
+            border:'3px solid '+(i===selectedSlot?'#efb637':'#999'),
+            background:'#f1efea',borderRadius:'7px',boxShadow:i===selectedSlot?'0 0 12px #ffc':'' }">
+        <div :style="{
+              width:'100%',height:'100%',
+              display:'flex',alignItems:'center',justifyContent:'center',
+              fontWeight:'bold',fontSize:'1.19em',color:'#222',zIndex:2
+          }">
+          {{ blockName(bid) }}
+        </div>
+        <div v-if="COLORS[bid]" :style="{
+          position:'absolute',left:'7px',top:'6px',zIndex:1,
+          width:'26px',height:'26px',
+          background:'#'+(COLORS[bid].toString(16).padStart(6,'0')),
+          border:'2px solid #7e6332',borderRadius:'5px'
+        }"></div>
+        <div v-if="i===selectedSlot" style="
+            position:absolute;left:-5px;top:-5px;width:51px;height:51px;pointer-events:none;
+            border:2.2px solid #ffe26a;border-radius:8px;box-shadow:0 0 18px 0 #ffe26a88;
+          "></div>
+      </div>
+    </div>
+  </div>
+  `
 }).mount("#app");
