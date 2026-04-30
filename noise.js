@@ -46,7 +46,7 @@ class ValueNoise {
     }
 }
 
-// ===== 方块与颜色，支持矿物栏位 =====
+// =========== 方块定义 ===========
 const BLOCK = {
     grass: 0, dirt: 1, stone: 2, wood: 3, leaf: 4,
     water: 5, bedrock: 6, sand: 7, deep_stone: 8, lava: 9,
@@ -69,33 +69,55 @@ const COLORS = [
     0xc7bb80, // platinum_mine
     0x68e0ff  // diamond_mine
 ];
-
 const BLOCKNAMES = [
     "草", "土", "石", "木", "叶", "水", "基岩", "沙", "深石",
     "岩浆", "煤矿", "铜矿", "银矿", "白金", "钻石"
 ];
 
-// ========== 世界参数 ============
+// ========= 贴图资源加载 =========
+const BLOCK_TEXTURES = {};
+const BLOCK_TEXTURE_FILES = [
+    "grass.png", "dirt.png", "stone.png", "wood.png", "leaf.png", "water.png",
+    "bedrock.png", "sand.png", "deep_stone.png", "lava.png",
+    "coal_mine.png", "copper_mine.png", "silver_mine.png",
+    "platinum_mine.png", "diamond_mine.png"
+];
+function preloadBlockTextures(callback) {
+    const loader = new THREE.TextureLoader();
+    let loaded=0, total=BLOCK_TEXTURE_FILES.length;
+    for(let i=0;i<BLOCK_TEXTURE_FILES.length;i++){
+        let file = BLOCK_TEXTURE_FILES[i];
+        loader.load(
+            "assets/textures/" + file,
+            tex=>{
+                tex.magFilter = tex.minFilter = THREE.NearestFilter;
+                BLOCK_TEXTURES[i]=tex; // i与BLOCK定义顺序一致
+                if(++loaded===total && callback) callback();
+            },
+            undefined, ()=>{
+                BLOCK_TEXTURES[i]=null;
+                if(++loaded===total && callback) callback();
+            }
+        );
+    }
+}
+
+// ====== 世界生成逻辑（略，和前面保持一致，你只需照常用 createWorld） ======
 const WORLD_W = 64, WORLD_D = 64, WORLD_H = 48, SAND_THICK = 3;
 const noise = new ValueNoise(54188114514);
-
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
-
 function createWorld() {
     const blocks = [];
     for (let x = 0; x < WORLD_W; x++) {
         blocks[x] = [];
         for (let y = 0; y < WORLD_H; y++) {
             blocks[x][y] = [];
-            for (let z = 0; z < WORLD_D; z++) {
-                blocks[x][y][z] = null;
-            }
+            for (let z = 0; z < WORLD_D; z++) blocks[x][y][z] = null;
         }
     }
     const waterLine = Math.floor(WORLD_H * 0.26);
     const deepslateH = 8;
     const bedrockBase = 2;
-
     for (let x = 0; x < WORLD_W; x++) {
         for (let z = 0; z < WORLD_D; z++) {
             let e = noise.fbm(x/30, z/30, {octaves:4, gain:0.55, lacunarity:2.1});
@@ -106,15 +128,12 @@ function createWorld() {
                 worleyVal * WORLD_H * 0.25
             );
             let h = clamp(h0, 5, WORLD_H-2);
-
             for(let y=0; y<WORLD_H; ++y) blocks[x][y][z] = null;
-
             for(let y=0; y<bedrockBase; ++y)
                 if(Math.random()<0.66 || y==0)
                     blocks[x][y][z]=BLOCK.bedrock;
                 else
                     blocks[x][y][z]=BLOCK.deep_stone;
-
             for(let y=bedrockBase; y<=h; ++y){
                 let isLow = h < waterLine + 3;
                 if(isLow && y >= h-SAND_THICK+1) { blocks[x][y][z]=BLOCK.sand; continue; }
@@ -165,7 +184,6 @@ function createWorld() {
     }
     return blocks;
 }
-// ====== 矿物分布函数 ======
 function randomOre(x, y, z, type='deep') {
     let r = Math.random();
     let stoneDepth = Math.max(1, y);
@@ -177,6 +195,7 @@ function randomOre(x, y, z, type='deep') {
     return null;
 }
 
+// ============ 游戏状态 ============
 const HOTBAR_SIZE=8;
 const DEFAULT_HOTBAR = [
     BLOCK.grass, BLOCK.dirt, BLOCK.stone, BLOCK.sand,
@@ -193,13 +212,12 @@ const gameState = {
     speed: 0.17,
     size: 0.6,
     blocks: createWorld(),
-    // ==== 物品栏 ====
     hotbar: DEFAULT_HOTBAR.slice(),
     selectedSlot: 0
 };
 window.gameState = gameState;
 
-// ========== Three.js 场景 ==========
+// =========== Three.js 场景 ===========
 let camera, scene, renderer, blockMeshes;
 function setupThree() {
     scene = new THREE.Scene();
@@ -215,6 +233,25 @@ function setupThree() {
     renderVisibleBlocks();
 }
 
+// ===== 用贴图渲染方块，如果没贴图则用纯色 =====
+function addBlockMesh(x, y, z, id) {
+    let geometry = new THREE.BoxGeometry(1,1,1);
+    let opts = {}, tex = BLOCK_TEXTURES[id];
+    if(tex) {
+        opts.map = tex;
+        if(id===BLOCK.water || id===BLOCK.leaf) {
+            opts.transparent = true;
+            opts.opacity = 0.75;
+        }
+    } else {
+        opts.color = COLORS[id]||0xff00ff;
+    }
+    let material = new THREE.MeshLambertMaterial(opts);
+    let mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x,y,z);
+    scene.add(mesh);
+    blockMeshes.set(`${x}_${y}_${z}`, mesh);
+}
 function renderVisibleBlocks() {
     const RENDER_DIST = 16;
     let camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
@@ -235,21 +272,11 @@ function renderVisibleBlocks() {
         }
       }
 }
-function addBlockMesh(x, y, z, id) {
-    let color = COLORS[id]||0xff00ff;
-    let geometry = new THREE.BoxGeometry(1,1,1);
-    let material = new THREE.MeshLambertMaterial({color});
-    let mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(x,y,z);
-    scene.add(mesh);
-    blockMeshes.set(`${x}_${y}_${z}`, mesh);
-}
 function removeBlockMesh(x, y, z) {
     let key = `${x}_${y}_${z}`;
     let mesh = blockMeshes.get(key);
     if(mesh) { scene.remove(mesh); blockMeshes.delete(key);}
 }
-
 window.addEventListener('resize',()=>{
     if(!renderer||!camera)return;
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -284,8 +311,8 @@ function stepPlayer() {
     let dx = 0, dz = 0;
     if(gameState.move.w) { dx += Math.sin(ang)*speed; dz += Math.cos(ang)*speed; }
     if(gameState.move.s) { dx -= Math.sin(ang)*speed; dz -= Math.cos(ang)*speed; }
-    if(gameState.move.d) { dx += Math.sin(ang - Math.PI/2)*speed; dz += Math.cos(ang - Math.PI/2)*speed; }
-    if(gameState.move.a) { dx += Math.sin(ang + Math.PI/2)*speed; dz += Math.cos(ang + Math.PI/2)*speed; }
+    if(gameState.move.a) { dx += Math.sin(ang - Math.PI/2)*speed; dz += Math.cos(ang - Math.PI/2)*speed; }
+    if(gameState.move.d) { dx += Math.sin(ang + Math.PI/2)*speed; dz += Math.cos(ang + Math.PI/2)*speed; }
     let px = gameState.px, py = gameState.py, pz = gameState.pz;
     let dy = 0;
     if(gameState.fly){
@@ -363,7 +390,6 @@ function onMousedown(e) {
     }
 }
 function onContextMenu(e) { e.preventDefault(); }
-
 function setupInput() {
     renderer.domElement.addEventListener('click',()=>{
         renderer.domElement.requestPointerLock();
@@ -381,13 +407,10 @@ function setupInput() {
         if(gameState.lookV<-V)gameState.lookV=-V;
         if(gameState.lookV>V)gameState.lookV=V;
     });
-    // 数字键1~8切换物品栏
     window.addEventListener('keydown',e=>{
-        // 热键栏选择
         if(/^Digit[1-8]$/.test(e.code)){
             gameState.selectedSlot = Number(e.code.slice(-1)) - 1;
         }
-        // 原有移动
         if(e.code==='KeyW')gameState.move.w=1;
         if(e.code==='KeyA')gameState.move.a=1;
         if(e.code==='KeyS')gameState.move.s=1;
@@ -408,7 +431,6 @@ function setupInput() {
         if(e.code==='Space')gameState.move.up=0;
         if(e.code==='ShiftLeft')gameState.move.down=0;
     });
-    // 鼠标滚轮切换选中物品栏
     window.addEventListener('wheel',e=>{
         let sz = gameState.hotbar.length;
         if(sz>0) {
@@ -420,8 +442,6 @@ function setupInput() {
     window.addEventListener('mousedown',onMousedown);
     window.addEventListener('contextmenu',onContextMenu);
 }
-
-// ========= 热键栏UI =========
 function blockName(id) {
     let idx = Object.values(BLOCK).indexOf(id);
     return BLOCKNAMES[idx] || "未知";
@@ -441,9 +461,11 @@ createApp({
       }
   },
   mounted() {
-      setupThree();
-      setupInput();
-      animate();
+      preloadBlockTextures(()=>{
+          setupThree();
+          setupInput();
+          animate();
+      });
   },
   template: `
   <div>
