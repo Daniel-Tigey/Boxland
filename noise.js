@@ -91,7 +91,7 @@ class ValueNoise {
 }
 // =========== 方块定义与贴图 ===========
 const BLOCK = {
-    grass: 0, dirt: 1, stone: 2, wood: 3, leaf: 4,
+    grass_soil: 0, soil: 1, stone: 2, banyan_wood: 3, leaf: 4,
     water: 5, bedrock: 6, sand: 7, deep_stone: 8, lava: 9,
     coal_mine: 10, copper_mine: 11, silver_mine: 12, platinum_mine: 13, diamond_mine: 14,
     ice: 15, snow: 16, cactus: 17
@@ -102,17 +102,25 @@ const COLORS = [
     0xaeeffd,0xffffff,0x41ca33
 ];
 const BLOCKNAMES = [
-    "grass", "dirt", "stone", "wood", "leaf", "water", "bedrock", "sand", "deep_stone",
+    "grass_soil", "soil", "stone", "banyan_wood", "leaf", "water", "bedrock", "sand", "deep_stone",
     "lava", "coal_mine", "copper_mine", "silver_mine", "platinum_mine", "diamond_mine",
     "ice", "snow", "cactus"
 ];
 const BLOCK_TEXTURE_FILES = [
-    "grass_top.png", "grass.png", "grass_bottom.png",
-    "dirt.png", "stone.png",
-    "wood_top.png", "wood.png", "wood_bottom.png",
-    "leaf.png", "water.png", "bedrock.png", "sand.png", "deep_stone.png",
-    "lava.png", "coal_mine.png", "copper_mine.png", "silver_mine.png", "platinum_mine.png", "diamond_mine.png",
-    "ice.png", "snow.png", "cactus.png"
+    "grass_soil_top.png", "grass_soil.png", "grass_soil_bottom.png",
+    "soil.png",
+    "stone.png",
+    "banyan_wood_top.png", "banyan_wood.png", "banyan_wood_bottom.png",
+    "leaf.png",
+    "water.png",
+    "bedrock.png",
+    "sand.png",
+    "deep_stone.png",
+    "lava.png",
+    "coal_mine.png", "copper_mine.png", "silver_mine.png", "platinum_mine.png", "diamond_mine.png",
+    "ice.png",
+    "snow.png",
+    "cactus.png"
 ];
 const BLOCK_TEXTURES = {};
 function preloadBlockTextures(callback) {
