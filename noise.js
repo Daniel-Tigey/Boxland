@@ -148,15 +148,20 @@ function getBlockTexture(id, face) {
 
 // ==== 设置页联动渲染距离 ====
 function getRenderDist() {
-    let d = parseInt(localStorage.getItem('renderDistance'), 10);
-    if(isNaN(d) || d<3 || d>64) d=18;
-    return d;
+    try {
+        let d = parseInt(localStorage.getItem('renderDistance'), 10);
+        if(isNaN(d) || d<3 || d>64) d=18;
+        return d;
+    } catch(e) {
+        return 18;
+    }
 }
 
 // ========== 地形生成 ==========
 const WORLD_W = 512, WORLD_D = 512, WORLD_H = 64, SAND_THICK = 3;
 const perlin = new PerlinNoise(20230519);
 const valueNoise = new ValueNoise(54188114514);
+function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
 function getBiome(x, z) {
     let bio = perlin.noise(x/180, z/180);
@@ -164,7 +169,6 @@ function getBiome(x, z) {
     if(bio > 0.72)  return "snow";
     return "normal";
 }
-function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 function carveCave(blocks, cx, cy, cz, r, len, yaw, pitch) {
     let dx=Math.cos(pitch)*Math.cos(yaw), dz=Math.cos(pitch)*Math.sin(yaw), dy=Math.sin(pitch);
     for (let t = 0; t < len; ++t) {
@@ -176,6 +180,7 @@ function carveCave(blocks, cx, cy, cz, r, len, yaw, pitch) {
                 let dist=Math.sqrt(x2*x2+y2*y2+z2*z2);
                 if(dist<=rr){
                     let bx=px+x2, by=py+y2, bz=pz+z2;
+                    if(bx < 0 || bx >= WORLD_W || by < 0 || by >= WORLD_H || bz <0 || bz >= WORLD_D) continue;
                     if(bx>3&&bx<WORLD_W-4&&by>3&&by<WORLD_H-3&&bz>3&&bz<WORLD_D-4)
                         blocks[bx][by][bz]=null;
                 }
