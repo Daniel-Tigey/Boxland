@@ -170,33 +170,43 @@ function getBiome(x, z) {
     return "normal";
 }
 function carveCave(blocks, cx, cy, cz, r, len, yaw, pitch) {
-    // 安全兜底：blocks 不存在直接返回
     if (!blocks) return;
-    
-    let dx=Math.cos(pitch)*Math.cos(yaw), dz=Math.cos(pitch)*Math.sin(yaw), dy=Math.sin(pitch);
+
+    let dx = Math.cos(pitch) * Math.cos(yaw);
+    let dz = Math.cos(pitch) * Math.sin(yaw);
+    let dy = Math.sin(pitch);
+
     for (let t = 0; t < len; ++t) {
-        let px = Math.floor(cx+dx*t), py = Math.floor(cy+dy*t), pz = Math.floor(cz+dz*t);
-        let rr = r * (Math.sin(Math.PI * t / len)*0.6+0.7);
-        
-        for(let x2=-rr;x2<=rr;++x2)
-          for(let y2=-rr;y2<=rr;++y2)
-            for(let z2=-rr;z2<=rr;++z2){
-                let dist=Math.sqrt(x2*x2+y2*y2+z2*z2);
-                if(dist<=rr){
-                    let bx=px+x2, by=py+y2, bz=pz+z2;
-                    if (
-                        bx < 0 || bx >= WORLD_W ||
-                        by < 0 || by >= WORLD_H ||
-                        bz < 0 || bz >= WORLD_D ||
-                        !blocks[bx] ||          // 防止 x 层不存在
-                        !blocks[bx][by]         // 防止 y 层不存在
-                    ) {
-                        continue;
+        let px = Math.floor(cx + dx * t);
+        let py = Math.floor(cy + dy * t);
+        let pz = Math.floor(cz + dz * t);
+        let rr = r * (Math.sin(Math.PI * t / len) * 0.6 + 0.7);
+
+        for (let x2 = -rr; x2 <= rr; ++x2) {
+            for (let y2 = -rr; y2 <= rr; ++y2) {
+                for (let z2 = -rr; z2 <= rr; ++z2) {
+                    let dist = Math.sqrt(x2 * x2 + y2 * y2 + z2 * z2);
+                    if (dist <= rr) {
+                        let bx = px + x2;
+                        let by = py + y2;
+                        let bz = pz + z2;
+                        if (
+                            typeof blocks[bx] === "undefined" ||
+                            typeof blocks[bx][by] === "undefined" ||
+                            typeof blocks[bx][by][bz] === "undefined"
+                        ) {
+                            continue;
+                        }
+                        if (bx > 3 && bx < WORLD_W - 4 &&
+                            by > 3 && by < WORLD_H - 3 &&
+                            bz > 3 && bz < WORLD_D - 4)
+                        {
+                            blocks[bx][by][bz] = null;
+                        }
                     }
-                    if(bx>3&&bx<WORLD_W-4&&by>3&&by<WORLD_H-3&&bz>3&&bz<WORLD_D-4)
-                        blocks[bx][by][bz]=null;
                 }
             }
+        }
     }
 }
 function addOreCluster(blocks, kind, cx, cy, cz, size) {
