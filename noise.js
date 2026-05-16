@@ -401,46 +401,67 @@ function setupThree() {
     blockMeshes = new Map();
     renderVisibleBlocks();
 }
+let defaultCubeGeometry; // 全局只创建一次立方体
 function addBlockMesh(x, y, z, id) {
-    let geometry = new THREE.BoxGeometry(1,1,1);
-    const faces = ["side","side","top","bottom","side","side"];
+    if (!defaultCubeGeometry) {
+        defaultCubeGeometry = new THREE.BoxGeometry(1, 1, 1);
+    }
+    const faces = ["side", "side", "top", "bottom", "side", "side"];
     let faceMats = faces.map(face => {
         let tex = getBlockTexture(id, face);
-        let opts={};
-        if(tex){
-            opts.map=tex;
-            if(id===BLOCK.water || id===BLOCK.leaf || id===BLOCK.ice){
+        let opts = {};
+        if (tex) {
+            opts.map = tex;
+            if (id === BLOCK.water || id === BLOCK.leaf || id === BLOCK.ice) {
                 opts.transparent = true; opts.opacity = 0.79;
             }
-        }else{
-            opts.color = COLORS[id]||0xff00ff;
+        } else {
+            opts.color = COLORS[id] || 0xff00ff;
         }
         return new THREE.MeshLambertMaterial(opts);
     });
-    let mesh = new THREE.Mesh(geometry, faceMats);
-    mesh.position.set(x,y,z);
+    let mesh = new THREE.Mesh(defaultCubeGeometry, faceMats);
+    mesh.position.set(x, y, z);
     scene.add(mesh);
     blockMeshes.set(`${x}_${y}_${z}`, mesh);
 }
 function renderVisibleBlocks() {
-    let camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
+    let camX = Math.floor(gameState.px);
+    let camY = Math.floor(gameState.py);
+    let camZ = Math.floor(gameState.pz);
     let RENDER_DIST = getRenderDist();
-    for(let x=0;x<WORLD_W;++x)
-     for(let y=0;y<WORLD_H;++y)
-      for(let z=0;z<WORLD_D;++z) {
-        let id = gameState.blocks[x][y][z];
-        let key = `${x}_${y}_${z}`;
-        let dx = x-camX, dy = y-camY, dz = z-camZ;
-        let inRange = Math.max(Math.abs(dx),Math.abs(dy),Math.abs(dz)) <= RENDER_DIST;
-        if(id !== null && inRange) {
-            if(!blockMeshes.has(key)) addBlockMesh(x,y,z,id);
-        } else {
-            if(blockMeshes.has(key)) {
-                scene.remove(blockMeshes.get(key));
-                blockMeshes.delete(key);
+
+    // 先把所有超出距离的方块卸载
+    for (const [key, mesh] of blockMeshes.entries()) {
+        let [x, y, z] = key.split('_').map(Number);
+        let dx = Math.abs(x - camX);
+        let dy = Math.abs(y - camY);
+        let dz = Math.abs(z - camZ);
+        if (dx > RENDER_DIST || dy > RENDER_DIST || dz > RENDER_DIST) {
+            scene.remove(mesh);
+            blockMeshes.delete(key);
+        }
+    }
+
+    // 只渲染视野内的方块
+    let minX = Math.max(0, camX - RENDER_DIST);
+    let maxX = Math.min(WORLD_W - 1, camX + RENDER_DIST);
+    let minY = Math.max(0, camY - RENDER_DIST);
+    let maxY = Math.min(WORLD_H - 1, camY + RENDER_DIST);
+    let minZ = Math.max(0, camZ - RENDER_DIST);
+    let maxZ = Math.min(WORLD_D - 1, camZ + RENDER_DIST);
+
+    for (let x = minX; x <= maxX; x++) {
+        for (let y = minY; y <= maxY; y++) {
+            for (let z = minZ; z <= maxZ; z++) {
+                let id = gameState.blocks[x][y][z];
+                let key = `${x}_${y}_${z}`;
+                if (id !== null && !blockMeshes.has(key)) {
+                    addBlockMesh(x, y, z, id);
+                }
             }
         }
-      }
+    }
 }
 function removeBlockMesh(x, y, z) {
     let key = `${x}_${y}_${z}`;
