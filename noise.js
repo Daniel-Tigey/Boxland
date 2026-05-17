@@ -118,14 +118,14 @@ const BLOCK_TEXTURE_FILES = [
     "deep_stone.png",
     "lava.png",
     "coal_mine.png", "copper_mine.png", "silver_mine.png", "platinum_mine.png", "diamond_mine.png",
-    "ice.png", "snow.png", "cactus.png"
+    "ice.png",
+    "snow.png",
+    "cactus.png"
 ];
 const BLOCK_TEXTURES = {};
 function preloadBlockTextures(callback) {
     const loader = new THREE.TextureLoader();
     let loaded=0, total=BLOCK_TEXTURE_FILES.length;
-    if(total === 0 && callback) { callback(); return; }
-    
     for(let i=0;i<BLOCK_TEXTURE_FILES.length;i++){
         let file = BLOCK_TEXTURE_FILES[i];
         loader.load(
@@ -164,10 +164,10 @@ function getBlockTexture(id, face) {
 function getRenderDist() {
     try {
         let d = parseInt(localStorage.getItem('renderDistance'), 10);
-        if(isNaN(d) || d<3 || d>64) d=16;
+        if(isNaN(d) || d<3 || d>64) d=18;
         return d;
     } catch(e) {
-        return 16;
+        return 18;
     }
 }
 
@@ -201,16 +201,13 @@ function carveCave(blocks, cx, cy, cz, r, len, yaw, pitch) {
                 for (let z2 = -rr; z2 <= rr; z2++) {
                     let dist = Math.sqrt(x2 * x2 + y2 * y2 + z2 * z2);
                     if (dist <= rr) {
-                        let bx = px + x2;
-                        let by = py + y2;
-                        let bz = pz + z2;
-
+                        let bx = Math.floor(px + x2);
+                        let by = Math.floor(py + y2);
+                        let bz = Math.floor(pz + z2);
                         if (bx < 0 || bx >= WORLD_W || by < 0 || by >= WORLD_H || bz < 0 || bz >= WORLD_D) continue;
                         if (!blocks[bx] || !blocks[bx][by]) continue;
-
-                        if (bx > 3 && bx < WORLD_W - 4 && by > 3 && by < WORLD_H - 3 && bz > 3 && bz < WORLD_D - 4) {
-                            blocks[bx][by][bz] = null;
-                        }
+                        
+                        blocks[bx][by][bz] = null;
                     }
                 }
             }
@@ -302,7 +299,7 @@ function createWorld() {
             }
         }
     }
-    for(let i=0;i<100;++i){
+    for(let i=0;i<350;++i){
         let cx = Math.floor(Math.random()*(WORLD_W-40))+20;
         let cy = 12+Math.floor(Math.random()*(WORLD_H-22));
         let cz = Math.floor(Math.random()*(WORLD_D-40))+20;
@@ -388,6 +385,7 @@ const gameState = {
     hotbar: DEFAULT_HOTBAR.slice(),
     selectedSlot: 0
 };
+window.gameState = gameState;
 
 // Three.js渲染
 let camera, scene, renderer, blockMeshes;
@@ -425,7 +423,6 @@ function addBlockMesh(x, y, z, id) {
     blockMeshes.set(`${x}_${y}_${z}`, mesh);
 }
 function renderVisibleBlocks() {
-    if(!gameState.blocks) return;
     let camX = Math.floor(gameState.px);
     let camY = Math.floor(gameState.py);
     let camZ = Math.floor(gameState.pz);
@@ -446,7 +443,6 @@ function renderVisibleBlocks() {
     for (let x=minX;x<=maxX;x++) {
         for (let y=minY;y<=maxY;y++) {
             for (let z=minZ;z<=maxZ;z++) {
-                if(!gameState.blocks[x] || !gameState.blocks[x][y]) continue;
                 let id = gameState.blocks[x][y][z];
                 let key = `${x}_${y}_${z}`;
                 if (id !== null && !blockMeshes.has(key)) addBlockMesh(x,y,z,id);
@@ -475,7 +471,6 @@ function updateCamera() {
 function isSolid(x, y, z) {
     x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
     if(x<0||x>=WORLD_W||y<0||y>=WORLD_H||z<0||z>=WORLD_D) return true;
-    if(!gameState.blocks[x] || !gameState.blocks[x][y]) return true;
     let val = gameState.blocks[x][y][z];
     return val!==null && val!==BLOCK.water && val!==BLOCK.lava;
 }
@@ -538,7 +533,6 @@ function raycastBlock(maxDist=6) {
         let x = ox+lx*d, y = oy+ly*d, z = oz+lz*d;
         let xi = Math.floor(x), yi=Math.floor(y), zi=Math.floor(z);
         if(xi<0||xi>=WORLD_W||yi<0||yi>=WORLD_H||zi<0||zi>=WORLD_D)continue;
-        if(!gameState.blocks[xi] || !gameState.blocks[xi][yi]) continue;
         let t = gameState.blocks[xi][yi][zi];
         if(t!==null && t!==BLOCK.leaf_00) {
             let bx = x-lx*0.08, by = y-ly*0.08, bz = z-lz*0.08;
@@ -627,3 +621,63 @@ function blockName(id) {
     let idx = Object.values(BLOCK).indexOf(id);
     return BLOCKNAMES[idx] || "未知";
 }
+
+// Vue界面
+const {createApp} = Vue;
+createApp({
+  setup() {
+      return {
+        pointerLocked: Vue.computed(()=>gameState.pointerLocked),
+        showInfo: Vue.computed(()=>gameState.showInfo),
+        hotbar: Vue.computed(()=>gameState.hotbar),
+        selectedSlot: Vue.computed(()=>gameState.selectedSlot),
+        COLORS,
+        blockName
+      }
+  },
+  mounted() {
+      preloadBlockTextures(()=>{
+          setupThree();
+          setupInput();
+          animate();
+      });
+  },
+  template: `
+  <div>
+    <slot></slot>
+    <div v-if="showInfo && !pointerLocked"
+         style="position:fixed;top:0;left:0;background:rgba(0,0,0,0.7);color:#fff;padding:6px 20px;font-size:15px;z-index:20;">
+        <b>WASD/空格/Shift</b> 移动 | <b>鼠标左/右</b> 挖掘/放置 | <b>鼠标</b> 转头 <br>
+        <b>1-8</b>/滚轮快速切换物品栏 &nbsp; <b>F</b>飞行 &nbsp; <b>Esc</b> 退出 <br>
+        单击画面进入游戏
+    </div>
+    <div style="position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:25;display:flex;gap:8px;">
+      <div v-for="(bid,i) in hotbar"
+           :key="i"
+           :style="{
+            width:'42px',height:'42px',
+            margin:'0 3px',position:'relative',
+            border:'3px solid '+(i===selectedSlot?'#efb637':'#999'),
+            background:'#f1efea',borderRadius:'7px',boxShadow:i===selectedSlot?'0 0 12px #ffc':'' }">
+        <div :style="{
+              width:'100%',height:'100%',
+              display:'flex',alignItems:'center',justifyContent:'center',
+              fontWeight:'bold',fontSize:'1.19em',color:'#222',zIndex:2
+          }">
+          {{ blockName(bid) }}
+        </div>
+        <div v-if="COLORS[bid]" :style="{
+          position:'absolute',left:'7px',top:'6px',zIndex:1,
+          width:'26px',height:'26px',
+          background:'#'+(COLORS[bid].toString(16).padStart(6,'0')),
+          border:'2px solid #7e6332',borderRadius:'5px'
+        }"></div>
+        <div v-if="i===selectedSlot" style="
+            position:absolute;left:-5px;top:-5px;width:51px;height:51px;pointer-events:none;
+            border:2.2px solid #ffe26a;border-radius:8px;box-shadow:0 0 18px 0 #ffe26a88;
+          "></div>
+      </div>
+    </div>
+  </div>
+  `
+}).mount("#app");
