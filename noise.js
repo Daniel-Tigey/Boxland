@@ -205,9 +205,9 @@ function carveCave(blocks, cx, cy, cz, r, len, yaw, pitch) {
                         let by = py + y2;
                         let bz = pz + z2;
 
-                        // 安全边界检查，防止数组越界崩溃
+                        // 【三重安全检查：彻底防止越界报错】
                         if (bx < 0 || bx >= WORLD_W || by < 0 || by >= WORLD_H || bz < 0 || bz >= WORLD_D) continue;
-                        if (!blocks[bx] || !blocks[bx][by]) continue;
+                        if (!blocks[bx] || !blocks[bx][by]) continue; // 关键修复！
 
                         if (bx > 3 && bx < WORLD_W - 4 && by > 3 && by < WORLD_H - 3 && bz > 3 && bz < WORLD_D - 4) {
                             blocks[bx][by][bz] = null;
