@@ -1,4 +1,4 @@
-// --- ValueNoise + Worley分型地形 FBM/Worley Cellular Noise ----
+// -------- ValueNoise、PerlinNoise（如要淡化细节，可以只用ValueNoise） -------
 class ValueNoise {
     constructor(seed = 1) { this.seed = seed; }
     hash(x, y) {
@@ -46,7 +46,7 @@ class ValueNoise {
     }
 }
 
-// ---------------- 方块定义及贴图 ----------------
+// ---------------- 方块定义与贴图 ----------------
 const BLOCK = {
     grass_soil: 0, soil: 1, stone: 2, banyan_wood: 3, leaf_00: 4,
     water: 5, bedrock: 6, sand: 7, deep_stone: 8, lava: 9,
@@ -54,15 +54,12 @@ const BLOCK = {
     ice: 15, snow: 16, cactus: 17, leaf_07: 18, fir_wood: 19
 };
 const COLORS = [
-    0x4CAF50,0x8B5A2B,0x888888,0x8B4513,0x19cc19,
-    0x4091F7,0x000000,0xDED39E,0x3A3A3A,0xEF0000,
-    0x222222,0xF18D36,0xBFC7C7,0xc7bb80,0x68e0ff,
-    0xaeeffd,0xffffff,0x41ca33,0x2b5c29,0x6c4121
+    0x4CAF50,0x8B5A2B,0x888888,0x8B4513,0x19cc19,0x4091F7,0x000000,0xDED39E,0x3A3A3A,
+    0xEF0000,0x222222,0xF18D36,0xBFC7C7,0xc7bb80,0x68e0ff,0xaeeffd,0xffffff,0x41ca33
 ];
 const BLOCKNAMES = [
-    "grass_soil", "soil", "stone", "banyan_wood", "leaf_00",
-    "water", "bedrock", "sand", "deep_stone", "lava",
-    "coal_mine", "copper_mine", "silver_mine", "platinum_mine", "diamond_mine",
+    "grass_soil", "soil", "stone", "banyan_wood", "leaf_00", "water", "bedrock", "sand", "deep_stone",
+    "lava", "coal_mine", "copper_mine", "silver_mine", "platinum_mine", "diamond_mine",
     "ice", "snow", "cactus", "leaf_07", "fir_wood"
 ];
 const BLOCK_TEXTURE_FILES = [
@@ -70,7 +67,7 @@ const BLOCK_TEXTURE_FILES = [
     "soil.png", "stone.png",
     "banyan_wood_top.png", "banyan_wood.png", "banyan_wood_bottom.png",
     "fir_wood_top.png", "fir_wood.png", "fir_wood_bottom.png",
-    "leaf_00.png", "leaf_07.png",
+    "leaf_00.png", "leaf_07",
     "water.png", "bedrock.png", "sand.png", "deep_stone.png",
     "lava.png", "coal_mine.png", "copper_mine.png", "silver_mine.png", "platinum_mine.png", "diamond_mine.png",
     "ice.png", "snow.png", "cactus.png"
@@ -107,17 +104,10 @@ function getBlockTexture(id, face) {
     return null;
 }
 
-// --- 设置页渲染距离联动 ---
-function getRenderDist() {
-    let d = parseInt(localStorage.getItem('renderDistance'), 10);
-    if(isNaN(d) || d<3 || d>64) d=18;
-    return d;
-}
-
-// --------- 地形参数 ----------
+// ---------------- 地形与矿物参数 ---------------
 const WORLD_W = 512, WORLD_D = 512, WORLD_H = 64, SAND_THICK = 3;
+const perlin = new ValueNoise(20230519);
 const valueNoise = new ValueNoise(54188114514);
-
 function getBiome(x, z) {
     let bio = valueNoise.noise(x/180, z/180);
     if(bio < 0.32)  return "desert";
@@ -126,6 +116,13 @@ function getBiome(x, z) {
 }
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
+function getRenderDist() {
+    let d = parseInt(localStorage.getItem('renderDistance'), 10);
+    if(isNaN(d) || d<3 || d>64) d=18;
+    return d;
+}
+
+// -------- 洞穴与矿物团 --------
 function carveCave(blocks, cx, cy, cz, r, len, yaw, pitch) {
     let dx=Math.cos(pitch)*Math.cos(yaw), dz=Math.cos(pitch)*Math.sin(yaw), dy=Math.sin(pitch);
     for (let t = 0; t < len; ++t) {
@@ -173,7 +170,6 @@ function randomOre(x, y, z, type='deep') {
     return null;
 }
 
-// ------ 地图生成 ------
 function createWorld() {
     const blocks = [];
     for (let x = 0; x < WORLD_W; x++) {
@@ -188,11 +184,12 @@ function createWorld() {
     const bedrockBase = 2;
 
     for (let x = 0; x < WORLD_W; x++) {
-        for (let z = 0; x < WORLD_D; z++) {
+        for (let z = 0; z < WORLD_D; z++) {
             let e = valueNoise.fbm(x/30, z/30, {octaves:4, gain:0.55, lacunarity:2.1});
             let worleyVal = 0.44 - valueNoise.worley(x/32, z/32, 5);
             let h0 = Math.floor(WORLD_H * 0.2 + Math.pow(e, 1.05) * WORLD_H * 0.55 + worleyVal * WORLD_H * 0.25);
             let h = clamp(h0, 5, WORLD_H-2);
+
             let biome = getBiome(x,z);
             for(let y=0; y<WORLD_H; ++y) blocks[x][y][z] = null;
             for(let y=0; y<bedrockBase; ++y)
@@ -202,10 +199,6 @@ function createWorld() {
                     blocks[x][y][z]=BLOCK.deep_stone;
             for(let y=bedrockBase; y<=h; ++y){
                 let isLow = h < waterLine + 3;
-                // 地表露石增强：高山/水边3%机会替代草/沙为石块
-                if(y==h && (isLow?Math.random()<0.04:Math.random()<0.03) && biome!=="snow"){
-                    blocks[x][y][z]=BLOCK.stone; continue;
-                }
                 if(isLow && y >= h-SAND_THICK+1 && biome==="desert") { blocks[x][y][z]=BLOCK.sand; continue; }
                 if(isLow && y >= h-SAND_THICK+1 && biome==="snow") { blocks[x][y][z]=BLOCK.snow; continue;}
                 if(y < bedrockBase + deepslateH || (y < h-6 && h > waterLine+10 && Math.random()<0.25)) {
@@ -233,6 +226,7 @@ function createWorld() {
             }
             if(h < waterLine-1) for(let y=h+1; y<waterLine; ++y)
                 blocks[x][y][z] = BLOCK.water;
+            // 沙漠仙人掌
             if(biome==="desert" && Math.random()<0.015 && h>waterLine+2){
                 for(let dh=1;dh<=2+Math.floor(Math.random()*3);++dh)
                     if(h+dh<WORLD_H-1) blocks[x][h+dh][z]=BLOCK.cactus;
@@ -263,7 +257,7 @@ function createWorld() {
             addOreCluster(blocks, conf.kind, cx, cy, cz, conf.size);
         }
     }
-    // --- 树：底部至少留2格树干 -----------------
+    // 树
     for(let i=0; i<400; ++i){
         let x = Math.floor(Math.random()*(WORLD_W-7)+3), z = Math.floor(Math.random()*(WORLD_D-7)+3);
         let biome = getBiome(x,z);
@@ -276,14 +270,11 @@ function createWorld() {
         if(y<4) continue;
         let height = snowTree ? 2+Math.floor(valueNoise.noise(x*0.23,z*0.28)*1.4)
                               : 4+Math.floor(valueNoise.noise(x*0.23,z*0.28)*2.6);
-        // 1. 先长树干
         for(let h2=1;h2<=height;++h2)
             blocks[x][y+h2][z]=BLOCK.banyan_wood;
-        // 2. 树冠。底部2格不长叶
         for(let lx=-2;lx<=2;++lx)
          for(let ly=Math.floor(height/2);ly<=height+2;++ly)
           for(let lz=-2;lz<=2;++lz) {
-            if(ly <= 2) continue; // 控制叶子不在底部生成
             if(Math.abs(lx)+Math.abs(lz)>3||(lx===0&&ly===Math.floor(height/2)&&lz===0)) continue;
             let tx=x+lx, ty=y+ly, tz=z+lz;
             if(tx<0||ty>=WORLD_H||tz<0||tx>=WORLD_W||tz>=WORLD_D) continue;
@@ -297,7 +288,7 @@ function createWorld() {
     return blocks;
 }
 
-// ------ 游戏状态热键栏 -----
+// ------ 游戏状态与Three.js渲染，完全经典实现 ------
 const HOTBAR_SIZE=8;
 const DEFAULT_HOTBAR = [
     BLOCK.grass_soil, BLOCK.soil, BLOCK.stone, BLOCK.sand,
@@ -318,8 +309,7 @@ const gameState = {
     selectedSlot: 0
 };
 window.gameState = gameState;
-
-// =========== Three.js完整渲染 ===========
+// =========== Three.js 场景 ===========
 let camera, scene, renderer, blockMeshes;
 function setupThree() {
     scene = new THREE.Scene();
@@ -334,30 +324,29 @@ function setupThree() {
     blockMeshes = new Map();
     renderVisibleBlocks();
 }
+
+// ===== 用贴图渲染方块，如果没贴图则用纯色 =====
 function addBlockMesh(x, y, z, id) {
     let geometry = new THREE.BoxGeometry(1,1,1);
-    const faces = ["side","side","top","bottom","side","side"];
-    let faceMats = faces.map(face => {
-        let tex = getBlockTexture(id, face);
-        let opts={};
-        if(tex){
-            opts.map=tex;
-            if([BLOCK.water, BLOCK.leaf_00, BLOCK.ice].includes(id)){
-                opts.transparent = true; opts.opacity = 0.79;
-            }
-        }else{
-            opts.color = COLORS[id]||0xff00ff;
+    let opts = {}, tex = BLOCK_TEXTURES[id];
+    if(tex) {
+        opts.map = tex;
+        if(id===BLOCK.water || id===BLOCK.leaf) {
+            opts.transparent = true;
+            opts.opacity = 0.75;
         }
-        return new THREE.MeshLambertMaterial(opts);
-    });
-    let mesh = new THREE.Mesh(geometry, faceMats);
+    } else {
+        opts.color = COLORS[id]||0xff00ff;
+    }
+    let material = new THREE.MeshLambertMaterial(opts);
+    let mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(x,y,z);
     scene.add(mesh);
     blockMeshes.set(`${x}_${y}_${z}`, mesh);
 }
 function renderVisibleBlocks() {
+    const RENDER_DIST = 19;
     let camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
-    let RENDER_DIST = getRenderDist();
     for(let x=0;x<WORLD_W;++x)
      for(let y=0;y<WORLD_H;++y)
       for(let z=0;z<WORLD_D;++z) {
@@ -386,6 +375,7 @@ window.addEventListener('resize',()=>{
     camera.aspect = window.innerWidth/window.innerHeight;
     camera.updateProjectionMatrix();
 });
+
 function updateCamera() {
     camera.position.set(gameState.px, gameState.py, gameState.pz);
     let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
@@ -441,6 +431,7 @@ function stepPlayer() {
     pz = Math.max(1, Math.min(WORLD_D-2, pz));
     Object.assign(gameState, {px,py,pz});
 }
+
 function animate() {
     requestAnimationFrame(animate);
     stepPlayer();
@@ -448,6 +439,7 @@ function animate() {
     updateCamera();
     renderer && renderer.render(scene, camera);
 }
+
 function raycastBlock(maxDist=6) {
     let ox = gameState.px, oy = gameState.py+0.6, oz = gameState.pz;
     let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
@@ -459,7 +451,7 @@ function raycastBlock(maxDist=6) {
         let xi = Math.floor(x), yi=Math.floor(y), zi=Math.floor(z);
         if(xi<0||xi>=WORLD_W||yi<0||yi>=WORLD_H||zi<0||zi>=WORLD_D)continue;
         let t = gameState.blocks[xi][yi][zi];
-        if(t!==null && t!==BLOCK.leaf_00 && t!==BLOCK.leaf_07) {
+        if(t!==null && t!==BLOCK.leaf) {
             let bx = x-lx*0.08, by = y-ly*0.08, bz = z-lz*0.08;
             return {x:xi,y:yi,z:zi, px:Math.floor(bx),py:Math.floor(by),pz:Math.floor(bz)};
         }
@@ -547,6 +539,7 @@ function blockName(id) {
     return BLOCKNAMES[idx] || "未知";
 }
 
+// Vue界面
 const {createApp} = Vue;
 createApp({
   setup() {
