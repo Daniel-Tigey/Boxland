@@ -205,7 +205,9 @@ function carveCave(blocks, cx, cy, cz, r, len, yaw, pitch) {
                         let by = py + y2;
                         let bz = pz + z2;
 
+                        // 安全边界检查，防止数组越界崩溃
                         if (bx < 0 || bx >= WORLD_W || by < 0 || by >= WORLD_H || bz < 0 || bz >= WORLD_D) continue;
+                        if (!blocks[bx] || !blocks[bx][by]) continue;
 
                         if (bx > 3 && bx < WORLD_W - 4 && by > 3 && by < WORLD_H - 3 && bz > 3 && bz < WORLD_D - 4) {
                             blocks[bx][by][bz] = null;
@@ -465,7 +467,7 @@ window.addEventListener('resize',()=>{
 });
 function updateCamera() {
     camera.position.set(gameState.px, gameState.py, gameState.pz);
-    let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
+    let lx = Math.cos(gameState.lookV) * Math.sin(gameState.loobkH);
     let ly = Math.sin(gameState.lookV);
     let lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
     camera.lookAt(gameState.px + lx, gameState.py + ly, gameState.pz + lz);
@@ -677,7 +679,7 @@ createApp({
         <div v-if="i===selectedSlot" style="
             position:absolute;left:-5px;top:-5px;width:51px;height:51px;pointer-events:none;
             border:2.2px solid #ffe26a;border-radius:8px;box-shadow:0 0 18px 0 #ffe26a88;
-          ""></div>
+          "></div>
       </div>
     </div>
   </div>
