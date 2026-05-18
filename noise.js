@@ -186,22 +186,33 @@ function getBiome(x, z) {
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
 function carveCave(blocks, cx, cy, cz, r, len, yaw, pitch) {
-    let dx=Math.cos(pitch)*Math.cos(yaw), dz=Math.cos(pitch)*Math.sin(yaw), dy=Math.sin(pitch);
+    let dx = Math.cos(pitch) * Math.cos(yaw);
+    let dz = Math.cos(pitch) * Math.sin(yaw);
+    let dy = Math.sin(pitch);
     for (let t = 0; t < len; ++t) {
-        let px = Math.floor(cx+dx*t), py = Math.floor(cy+dy*t), pz = Math.floor(cz+dz*t);
-        let rr = r * (Math.sin(Math.PI * t / len)*0.6+0.7);
-        for(let x2=-rr;x2<=rr;++x2)
-          for(let y2=-rr;y2<=rr;++y2)
-            for(let z2=-rr;z2<=rr;++z2){
-                let dist=Math.sqrt(x2*x2+y2*y2+z2*z2);
-                if(dist<=rr){
-                    let bx=px+x2, by=py+y2, bz=pz+z2;
-                    if(bx>3&&bx<WORLD_W-4&&by>3&&by<WORLD_H-3&&bz>3&&bz<WORLD_D-4)
-                        blocks[bx][by][bz]=null;
+        let px = Math.floor(cx + dx * t);
+        let py = Math.floor(cy + dy * t);
+        let pz = Math.floor(cz + dz * t);
+
+        let rr = r * (Math.sin(Math.PI * t / len) * 0.6 + 0.7);
+        for (let x2 = -rr; x2 <= rr; ++x2) {
+            for (let y2 = -rr; y2 <= rr; ++y2) {
+                for (let z2 = -rr; z2 <= rr; ++z2) {
+                    let dist = Math.sqrt(x2 * x2 + y2 * y2 + z2 * z2);
+                    if (dist <= rr) {
+                        let bx = px + x2;
+                        let by = py + y2;
+                        let bz = pz + z2;
+                        if (bx >= 0 && bx < WORLD_W && by >= 0 && by < WORLD_H && bz >= 0 && bz < WORLD_D) {
+                            blocks[bx][by][bz] = null;
+                        }
+                    }
                 }
             }
+        }
     }
 }
+
 function addOreCluster(blocks, kind, cx, cy, cz, size) {
     let n = size*2+2;
     for(let i=0;i<n;i++){
@@ -307,7 +318,8 @@ function createWorld() {
         let cz = Math.floor(Math.random()*(WORLD_D-40))+20;
         let r = 2+Math.random()*5;
         let len = 18+Math.random()*55;
-        let yaw = Math.random()*Math.PI*2, pitch = (Math.random()-0.6)*Math.PI/7;
+        let yaw = Math.random()*Math.PI*2;
+        let pitch = (Math.random()-0.6)*Math.PI/7;
         carveCave(blocks, cx, cy, cz, r, len, yaw, pitch);
     }
     const ORE_CLUSTER_CONFIG = [
@@ -419,7 +431,7 @@ function addBlockMesh(x, y, z, id) {
 }
 function renderVisibleBlocks() {
     let camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
-    let RENDER_DIST = getRenderDist();
+    let RENDER_DIST = 18;
     for(let x=0;x<WORLD_W;++x)
      for(let y=0;y<WORLD_H;++y)
       for(let z=0;z<WORLD_D;++z) {
@@ -456,7 +468,155 @@ function updateCamera() {
     camera.lookAt(gameState.px + lx, gameState.py + ly, gameState.pz + lz);
 }
 
-// 其余输入/玩家控制/render loop同你之前代码
+function isSolid(x, y, z) {
+    x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
+    if(x<0||x>=WORLD_W||y<0||y>=WORLD_H||z<0||z>=WORLD_D) return true;
+    let val = gameState.blocks[x][y][z];
+    return val!==null && val!==BLOCK.water && val!==BLOCK.lava;
+}
+function canStand(nx, ny, nz) {
+    let h = 1.64, r = 0.29;
+    for(let y=ny-0.8; y<ny+h; y+=0.38)
+    for(let dx=-r; dx<=r; dx+=0.35)
+    for(let dz=-r; dz<=r; dz+=0.35) {
+        if(isSolid(nx+dx, y, nz+dz))return false;
+    }
+    return true;
+}
+function stepPlayer() {
+    let ang = gameState.lookH, speed = gameState.speed;
+    let dx = 0, dz = 0;
+    if(gameState.move.w) { dx += Math.sin(ang)*speed; dz += Math.cos(ang)*speed; }
+    if(gameState.move.s) { dx -= Math.sin(ang)*speed; dz -= Math.cos(ang)*speed; }
+    if(gameState.move.a) { dx += Math.sin(ang - Math.PI/2)*speed; dz += Math.cos(ang - Math.PI/2)*speed; }
+    if(gameState.move.d) { dx += Math.sin(ang + Math.PI/2)*speed; dz += Math.cos(ang + Math.PI/2)*speed; }
+    let px = gameState.px, py = gameState.py, pz = gameState.pz;
+    let dy = 0;
+    if(gameState.fly){
+        if(gameState.move.up) dy += speed;
+        if(gameState.move.down) dy -= speed;
+    } else {
+        gameState.vy -= 0.011;
+        dy = gameState.vy;
+    }
+    if(canStand(px, py+dy, pz)) {
+        py += dy;
+    } else {
+        let maxTry = 8, found = false, newY = py;
+        for(let t=0;t<=maxTry;++t) {
+            if(canStand(px, py+t*0.1, pz)) { newY=py+t*0.1; found=true; break; }
+        }
+        if(found) py = newY;
+        gameState.vy = 0;
+    }
+    if(canStand(px+dx, py, pz)) px += dx;
+    if(canStand(px, py, pz+dz)) pz += dz;
+    px = Math.max(1, Math.min(WORLD_W-2, px));
+    py = Math.max(2, Math.min(WORLD_H-2, py));
+    pz = Math.max(1, Math.min(WORLD_D-2, pz));
+    Object.assign(gameState, {px,py,pz});
+}
+function animate() {
+    requestAnimationFrame(animate);
+    stepPlayer();
+    renderVisibleBlocks();
+    updateCamera();
+    renderer && renderer.render(scene, camera);
+}
+function raycastBlock(maxDist=6) {
+    let ox = gameState.px, oy = gameState.py+0.6, oz = gameState.pz;
+    let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
+    let ly = Math.sin(gameState.lookV);
+    let lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
+    for(let i=0;i<maxDist*15;i++) {
+        let d = i*0.07;
+        let x = ox+lx*d, y = oy+ly*d, z = oz+lz*d;
+        let xi = Math.floor(x), yi=Math.floor(y), zi=Math.floor(z);
+        if(xi<0||xi>=WORLD_W||yi<0||yi>=WORLD_H||zi<0||zi>=WORLD_D)continue;
+        let t = gameState.blocks[xi][yi][zi];
+        if(t!==null && t!==BLOCK.leaf_00 && t!==BLOCK.leaf_07) {
+            let bx = x-lx*0.08, by = y-ly*0.08, bz = z-lz*0.08;
+            return {x:xi,y:yi,z:zi, px:Math.floor(bx),py:Math.floor(by),pz:Math.floor(bz)};
+        }
+    }
+    return null;
+}
+function onMousedown(e) {
+    if (!gameState.pointerLocked) return;
+    const hit = raycastBlock();
+    if (!hit) return;
+    if(e.button==0) {
+        if(gameState.blocks[hit.x][hit.y][hit.z]!==BLOCK.bedrock){
+            gameState.blocks[hit.x][hit.y][hit.z]=null;
+            removeBlockMesh(hit.x,hit.y,hit.z);
+        }
+    }
+    if(e.button==2) {
+        let {px,py,pz} = hit;
+        if (px<0||px>=WORLD_W||py<0||py>=WORLD_H||pz<0||pz>=WORLD_D ) return;
+        if(gameState.blocks[px][py][pz]==null
+           && Math.abs(px-gameState.px)>0.7
+           && Math.abs(py-gameState.py)>1.0
+           && Math.abs(pz-gameState.pz)>0.7 ){
+            let id = gameState.hotbar[gameState.selectedSlot];
+            gameState.blocks[px][py][pz]=id;
+            addBlockMesh(px,py,pz,id);
+        }
+    }
+}
+function onContextMenu(e) { e.preventDefault(); }
+function setupInput() {
+    renderer.domElement.addEventListener('click',()=>{
+        renderer.domElement.requestPointerLock();
+    });
+    document.addEventListener('pointerlockchange',()=>{
+        let locked = (document.pointerLockElement===renderer.domElement);
+        gameState.pointerLocked = locked;
+        if(locked) gameState.showInfo = false;
+    });
+    document.addEventListener('mousemove',e=>{
+        if(!gameState.pointerLocked)return;
+        gameState.lookH += e.movementX * 0.002;
+        gameState.lookV -= e.movementY * 0.002;
+        let V=Math.PI/2*0.99;
+        if(gameState.lookV<-V)gameState.lookV=-V;
+        if(gameState.lookV>V)gameState.lookV=V;
+    });
+    window.addEventListener('keydown',e=>{
+        if(/^Digit[1-8]$/.test(e.code)){
+            gameState.selectedSlot = Number(e.code.slice(-1)) - 1;
+        }
+        if(e.code==='KeyW')gameState.move.w=1;
+        if(e.code==='KeyA')gameState.move.a=1;
+        if(e.code==='KeyS')gameState.move.s=1;
+        if(e.code==='KeyD')gameState.move.d=1;
+        if(e.code==='Space') {
+            if(gameState.fly)gameState.move.up=1;
+            else if(gameState.vy===0 && canStand(gameState.px,gameState.py-0.2,gameState.pz)) gameState.vy=0.32;
+        }
+        if(e.code==='ShiftLeft')gameState.move.down=1;
+        if(e.code==='KeyF')gameState.fly=!gameState.fly;
+        if(e.code==='Escape'){ document.exitPointerLock && document.exitPointerLock(); }
+    });
+    window.addEventListener('keyup',e=>{
+        if(e.code==='KeyW')gameState.move.w=0;
+        if(e.code==='KeyA')gameState.move.a=0;
+        if(e.code==='KeyS')gameState.move.s=0;
+        if(e.code==='KeyD')gameState.move.d=0;
+        if(e.code==='Space')gameState.move.up=0;
+        if(e.code==='ShiftLeft')gameState.move.down=0;
+    });
+    window.addEventListener('wheel',e=>{
+        let sz = gameState.hotbar.length;
+        if(sz>0) {
+            if(e.deltaY>0) gameState.selectedSlot = (gameState.selectedSlot+1)%sz;
+            if(e.deltaY<0) gameState.selectedSlot = (gameState.selectedSlot+sz-1)%sz;
+            e.preventDefault();
+        }
+    },{passive:false});
+    window.addEventListener('mousedown',onMousedown);
+    window.addEventListener('contextmenu',onContextMenu);
+}
 
 function blockName(id) {
     let idx = Object.values(BLOCK).indexOf(id);
