@@ -59,7 +59,7 @@ const COLORS = [
 ];
 const BLOCKNAMES = [
     "grass", "dirt", "stone", "wood", "leaf", "water", "bedrock", "sand", "deep_stone",
-    "lava", "coal_mine", "copper_mine", "silver_mine", "platinum_mine", "diamond_mine"，
+    "lava", "coal_mine", "copper_mine", "silver_mine", "platinum_mine", "diamond_mine",
     "ice", "snow", "cactus"
 ];
 
