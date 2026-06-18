@@ -118,6 +118,31 @@ function getBiome(x, z) {
     return "normal";
 }
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+
+// =========== randomOre 函数定义 ===========
+function randomOre(x, y, z, type = 'deep_stone') {
+    const oreChances = [
+        { ore: BLOCK.coal_mine, chance: 0.08 },
+        { ore: BLOCK.copper_mine, chance: 0.05 },
+        { ore: BLOCK.silver_mine, chance: 0.03 },
+        { ore: BLOCK.platinum_mine, chance: 0.02 },
+        { ore: BLOCK.diamond_mine, chance: 0.01 }
+    ];
+    
+    let totalChance = oreChances.reduce((sum, item) => sum + item.chance, 0);
+    let roll = Math.random() * totalChance;
+    let accumulated = 0;
+    
+    for (let item of oreChances) {
+        accumulated += item.chance;
+        if (roll < accumulated) {
+            return item.ore;
+        }
+    }
+    
+    return null;
+}
+
 function createWorld() {
     const blocks = [];
     for (let x = 0; x < WORLD_W; x++) {
