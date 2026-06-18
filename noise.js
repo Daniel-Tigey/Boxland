@@ -46,6 +46,94 @@ class ValueNoise {
     }
 }
 
+// =========== PerlinNoise (2D) 实现，已加入以修复 missing PerlinNoise 错误 ===========
+class PerlinNoise {
+    constructor(seed = 0) {
+        this.seed = seed >>> 0;
+        // 构造确定性伪随机数生成器（LCG），用于打乱perm表
+        this._rand = (function(s) {
+            let state = s >>> 0;
+            return function() {
+                // LCG parameters (32-bit)
+                state = (1664525 * state + 1013904223) >>> 0;
+                return state / 4294967296;
+            };
+        })(this.seed ^ 0x9E3779B9);
+
+        // permutation table 0..255 shuffle, duplicated为512长度以便索引
+        this.perm = new Uint8Array(512);
+        const p = new Uint8Array(256);
+        for (let i = 0; i < 256; i++) p[i] = i;
+        // Fisher-Yates shuffle with deterministic RNG
+        for (let i = 255; i > 0; i--) {
+            const j = Math.floor(this._rand() * (i + 1));
+            const t = p[i]; p[i] = p[j]; p[j] = t;
+        }
+        for (let i = 0; i < 512; i++) this.perm[i] = p[i & 255];
+    }
+
+    // fade curve 6t^5 - 15t^4 + 10t^3 (Perlin 原推荐)
+    fade(t) {
+        return t * t * t * (t * (t * 6 - 15) + 10);
+    }
+
+    // 线性插值
+    lerp(a, b, t) {
+        return a + t * (b - a);
+    }
+
+    // grad: 用表索引产生伪随机梯度并计算点积，返回 -1..1 范围值
+    grad(hash, x, y) {
+        // 8个方向向量
+        const h = hash & 7;
+        switch (h) {
+            case 0: return  x + y;
+            case 1: return -x + y;
+            case 2: return  x - y;
+            case 3: return -x - y;
+            case 4: return  x;
+            case 5: return -x;
+            case 6: return  y;
+            default: return -y;
+        }
+    }
+
+    // 返回范围 0..1 的噪声值（二维）
+    noise(x, y) {
+        // 找到单元格坐标和相对坐标
+        const X = Math.floor(x) & 255;
+        const Y = Math.floor(y) & 255;
+        const xf = x - Math.floor(x);
+        const yf = y - Math.floor(y);
+
+        const u = this.fade(xf);
+        const v = this.fade(yf);
+
+        const aa = this.perm[X + this.perm[Y]];
+        const ab = this.perm[X + this.perm[Y + 1]];
+        const ba = this.perm[X + 1 + this.perm[Y]];
+        const bb = this.perm[X + 1 + this.perm[Y + 1]];
+
+        const x1 = this.lerp(this.grad(aa, xf, yf), this.grad(ba, xf - 1, yf), u);
+        const x2 = this.lerp(this.grad(ab, xf, yf - 1), this.grad(bb, xf - 1, yf - 1), u);
+        // Perlin 原输出在大致 -1..1，映射到 0..1
+        const result = this.lerp(x1, x2, v) * 0.5 + 0.5;
+        return result;
+    }
+
+    // 简单的 fbm 实现（用于你的创建地形）
+    fbm(x, y, {octaves = 5, gain = 0.5, lacunarity = 2.0, amp = 1, freq = 1} = {}) {
+        let sum = 0, totalAmp = 0;
+        for (let i = 0; i < octaves; ++i) {
+            sum += this.noise(x * freq, y * freq) * amp;
+            totalAmp += amp;
+            amp *= gain;
+            freq *= lacunarity;
+        }
+        return sum / totalAmp;
+    }
+}
+
 // =========== 方块定义 ===========
 const BLOCK = {
     grass: 0, dirt: 1, stone: 2, wood: 3, leaf: 4,
@@ -121,6 +209,8 @@ function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
 // =========== randomOre 函数定义 ===========
 function randomOre(x, y, z, type = 'deep_stone') {
+    // 简单地根据深度/位置可以拓展，这里保持轻量：按概率返回矿石或 null
+    // 你可以根据 y （高度）和 type 区分不同矿层概率
     const oreChances = [
         { ore: BLOCK.coal_mine, chance: 0.08 },
         { ore: BLOCK.copper_mine, chance: 0.05 },
@@ -128,18 +218,19 @@ function randomOre(x, y, z, type = 'deep_stone') {
         { ore: BLOCK.platinum_mine, chance: 0.02 },
         { ore: BLOCK.diamond_mine, chance: 0.01 }
     ];
-    
-    let totalChance = oreChances.reduce((sum, item) => sum + item.chance, 0);
+
+    // 如果传入 type 为 'stone'，可以略微改变概率（示例）
+    let modifier = 1.0;
+    if (type === 'stone') modifier = 0.75;
+    if (type === 'deep_stone') modifier = 1.25;
+
+    const totalChance = oreChances.reduce((s, it) => s + it.chance * modifier, 0);
     let roll = Math.random() * totalChance;
-    let accumulated = 0;
-    
-    for (let item of oreChances) {
-        accumulated += item.chance;
-        if (roll < accumulated) {
-            return item.ore;
-        }
+    let acc = 0;
+    for (let it of oreChances) {
+        acc += it.chance * modifier;
+        if (roll < acc) return it.ore;
     }
-    
     return null;
 }
 
