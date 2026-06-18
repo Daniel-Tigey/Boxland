@@ -66,10 +66,10 @@ const BLOCKNAMES = [
 // ==== 贴图文件名key ====
 const BLOCK_TEXTURES = {};
 const BLOCK_TEXTURE_FILES = [
-    "grass_top.png", "grass.png", "grass_bottom.png",
+    "grass_soil_top.png", "grass_soil.png", "grass_soil_bottom.png",
     "dirt.png",
     "stone.png",
-    "wood_top.png", "wood.png", "wood_bottom.png",
+    "banyan_wood_top.png", "banyan_wood.png", "banyan_wood_bottom.png",
     "leaf.png",
     "water.png",
     "bedrock.png",
@@ -82,7 +82,7 @@ const BLOCK_TEXTURE_FILES = [
     "platinum_mine.png",
     "diamond_mine.png",
     "ice.png",
-    "snow.png"，
+    "snow.png",
     "cactus.png"
 ];
 function preloadBlockTextures(callback) {
