@@ -111,7 +111,7 @@ class PerlinNoise {
 
 // =========== 方块定义 ===========
 const BLOCK = {
-    grass: 0, dirt: 1, stone: 2, wood: 3, leaf: 4,
+    grass: 0, soil: 1, stone: 2, banyan_wood: 3, leaf_00: 4,
     water: 5, bedrock: 6, sand: 7, deep_stone: 8, lava: 9,
     coal_mine: 10, copper_mine: 11, silver_mine: 12, platinum_mine: 13, diamond_mine: 14,
     ice: 15, snow: 16, cactus: 17
@@ -121,19 +121,19 @@ const COLORS = [
     0xEF0000,0x222222,0xF18D36,0xBFC7C7,0xc7bb80,0x68e0ff
 ];
 const BLOCKNAMES = [
-    "grass", "dirt", "stone", "wood", "leaf", "water", "bedrock", "sand", "deep_stone",
+    "grass", "soil", "stone", "banyan_wood", "leaf_00", "water", "bedrock", "sand", "deep_stone",
     "lava", "coal_mine", "copper_mine", "silver_mine", "platinum_mine", "diamond_mine",
     "ice", "snow", "cactus"
 ];
 
 // ==== 贴图文件名key ====
-const BLOCK_TEXTURES = {}; // will map filename -> THREE.Texture
+const BLOCK_TEXTURES = {};
 const BLOCK_TEXTURE_FILES = [
     "grass_soil_top.png", "grass_soil.png", "grass_soil_bottom.png",
-    "dirt.png",
+    "soil.png",
     "stone.png",
     "banyan_wood_top.png", "banyan_wood.png", "banyan_wood_bottom.png",
-    "leaf.png",
+    "leaf_00.png", "leaf_07.png",
     "water.png",
     "bedrock.png",
     "sand.png",
@@ -146,17 +146,16 @@ const BLOCK_TEXTURE_FILES = [
     "diamond_mine.png",
     "ice.png",
     "snow.png",
-    "cactus.png"
+    "cactus.png",
+    "fir_wood_top.png", "fir_wood.png", "fir_wood_bottom.png"
 ];
 
-// 映射：方块 id -> 使用的贴图文件名（支持 top/side/bottom）
-// 这样就不会再用“数组索引等于方块 id”的错误假设
 const BLOCK_TEXTURE_MAP = {
     [BLOCK.grass]:   { top: "grass_soil_top.png", side: "grass_soil.png", bottom: "grass_soil_bottom.png" },
-    [BLOCK.dirt]:    { side: "dirt.png" },
+    [BLOCK.soil]:    { side: "soil.png" },
     [BLOCK.stone]:   { side: "stone.png" },
-    [BLOCK.wood]:    { top: "banyan_wood_top.png", side: "banyan_wood.png", bottom: "banyan_wood_bottom.png" },
-    [BLOCK.leaf]:    { side: "leaf.png", transparent: true },
+    [BLOCK.banyan_wood]:    { top: "banyan_wood_top.png", side: "banyan_wood.png", bottom: "banyan_wood_bottom.png" },
+    [BLOCK.leaf_00]:    { side: "leaf_00.png", transparent: true },
     [BLOCK.water]:   { side: "water.png", transparent: true, opacity: 0.75 },
     [BLOCK.bedrock]: { side: "bedrock.png" },
     [BLOCK.sand]:    { side: "sand.png" },
@@ -216,7 +215,7 @@ function makeMaterialFromTexOrColor(tex, color, opts = {}) {
 
 // ===== 512*64*512大地图，渲染距离变量 =====
 const WORLD_W = 512, WORLD_D = 512, WORLD_H = 64, SAND_THICK = 3;
-let RENDER_DIST = 18; // 默认渲染距离
+let RENDER_DIST = 15; // 默认渲染距离
 const perlin = new PerlinNoise(20230519);
 const valueNoise = new ValueNoise(54188114514);
 function getBiome(x, z) {
@@ -227,25 +226,55 @@ function getBiome(x, z) {
 }
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
-// =========== randomOre 函数定义（保留之前实现） ===========
+// =========== randomOre 函数定义（改为按深度 + 噪声聚簇分布） ===========
 function randomOre(x, y, z, type = 'deep_stone') {
-    const oreChances = [
-        { ore: BLOCK.coal_mine, chance: 0.08 },
-        { ore: BLOCK.copper_mine, chance: 0.05 },
-        { ore: BLOCK.silver_mine, chance: 0.03 },
-        { ore: BLOCK.platinum_mine, chance: 0.02 },
-        { ore: BLOCK.diamond_mine, chance: 0.01 }
+    // depthFactor: 0 at top, 1 at bottom
+    const depthFactor = clamp(1 - (y / (WORLD_H - 1)), 0, 1);
+
+    // vein clustering factor (使用较低频的 Perlin 来聚簇矿脉)
+    const veinNoise = perlin.noise(x * 0.08, z * 0.08); // 0..1
+    const veinFactor = 0.6 + 0.9 * veinNoise; // 0.6..1.5
+
+    // 基础概率随深度变化（示例）
+    // 值为期望的相对权重（不是百分比），在最后按总和归一化
+    const weights = [
+        { ore: BLOCK.coal_mine, base: 0.12 * (0.9 + 0.2 * (1 - depthFactor)) },        // 煤：稍偏向浅层/中层
+        { ore: BLOCK.copper_mine, base: 0.07 * (0.9 + 0.4 * (1 - depthFactor)) },      // 铜：浅-中层
+        { ore: BLOCK.silver_mine, base: 0.04 * (0.7 + 0.8 * depthFactor) },            // 银：中深层
+        { ore: BLOCK.platinum_mine, base: 0.02 * (0.5 + 1.2 * depthFactor) },          // 白金：较深层
+        { ore: BLOCK.diamond_mine, base: 0.008 * (0.2 + 5.0 * Math.pow(depthFactor, 3)) } // 钻石：深处强烈增加（立方）
     ];
-    let modifier = 1.0;
-    if (type === 'stone') modifier = 0.75;
-    if (type === 'deep_stone') modifier = 1.25;
-    const totalChance = oreChances.reduce((s, it) => s + it.chance * modifier, 0);
-    let roll = Math.random() * totalChance;
-    let acc = 0;
-    for (let it of oreChances) {
-        acc += it.chance * modifier;
-        if (roll < acc) return it.ore;
+
+    // 如果是 stone 层或 deep_stone 层，可加强深层矿物概率（示例）
+    let typeModifier = 1.0;
+    if (type === 'stone') typeModifier = 0.85;
+    if (type === 'deep_stone') typeModifier = 1.25;
+
+    // 将每个权重乘以 veinFactor 和 typeModifier，得到 final weight
+    let total = 0;
+    for (let w of weights) {
+        w.final = w.base * veinFactor * typeModifier;
+        total += w.final;
     }
+
+    // 如果 total 非常小（极罕见），直接返回 null
+    if (total <= 0) return null;
+
+    // roll 并选择矿物
+    let r = Math.random() * total;
+    let acc = 0;
+    for (let w of weights) {
+        acc += w.final;
+        if (r < acc) {
+            // 附加条件：非常稀有的矿物可进一步按深度阈值过滤
+            if (w.ore === BLOCK.diamond_mine && depthFactor < 0.25) {
+                // 太浅：不要钻石
+                return null;
+            }
+            return w.ore;
+        }
+    }
+
     return null;
 }
 
@@ -298,7 +327,7 @@ function createWorld() {
                     else blocks[x][y][z]=BLOCK.stone;
                     continue;
                 }
-                if(y < h) { blocks[x][y][z]=BLOCK.dirt; continue; }
+                if(y < h) { blocks[x][y][z]=BLOCK.soil; continue; }
                 if(y==h) {
                     if(biome==="desert") blocks[x][y][z]=BLOCK.sand;
                     else if(biome==="snow") blocks[x][y][z]=BLOCK.stone;
@@ -319,12 +348,12 @@ function createWorld() {
         let snowTree = (biome==="snow");
         let y;
         for(y=WORLD_H-5; y>2; --y)
-            if([BLOCK.grass,BLOCK.dirt].includes(blocks[x][y][z]) && blocks[x][y+1][z]==null)
+            if([BLOCK.grass,BLOCK.soil].includes(blocks[x][y][z]) && blocks[x][y+1][z]==null)
                 break;
         if(y<4) continue;
         let height = snowTree ? 3+Math.floor(valueNoise.noise(x*0.23,z*0.28)*1.6) : 4+Math.floor(valueNoise.noise(x*0.23,z*0.28)*2.8);
         for(let h2=1;h2<=height;++h2)
-            blocks[x][y+h2][z]=BLOCK.wood;
+            blocks[x][y+h2][z]=BLOCK.banyan_wood;
         for(let lx=-2;lx<=2;++lx)
          for(let ly=Math.floor(height/2);ly<=height+2;++ly)
           for(let lz=-2;lz<=2;++lz) {
@@ -334,7 +363,7 @@ function createWorld() {
             let dist = Math.abs(lx)+Math.abs(ly-height)+Math.abs(lz);
             let dropP = snowTree ? 0.25+0.07*dist : 0.10+0.04*dist;
             if(Math.random()<dropP) continue;
-            if(blocks[tx][ty][tz]==null) blocks[tx][ty][tz]=snowTree?BLOCK.stone:BLOCK.leaf;
+            if(blocks[tx][ty][tz]==null) blocks[tx][ty][tz]=snowTree?BLOCK.stone:BLOCK.leaf_00;
          }
     }
     return blocks;
@@ -343,8 +372,8 @@ function createWorld() {
 // ============ 游戏状态 ============
 const HOTBAR_SIZE=8;
 const DEFAULT_HOTBAR = [
-    BLOCK.grass, BLOCK.dirt, BLOCK.stone, BLOCK.sand,
-    BLOCK.wood, BLOCK.leaf, BLOCK.deep_stone, BLOCK.coal_mine
+    BLOCK.grass, BLOCK.soil, BLOCK.stone, BLOCK.sand,
+    BLOCK.banyan_wood, BLOCK.leaf_00, BLOCK.deep_stone, BLOCK.coal_mine
 ];
 const gameState = {
     pointerLocked: false, showInfo: true,
@@ -392,7 +421,6 @@ function addBlockMesh(x, y, z, id) {
     const opacity = (typeof desc.opacity === 'number') ? desc.opacity : (transparent ? 0.75 : 1.0);
 
     // 创建 material：BoxGeometry 的 material 数组顺序为 [+X, -X, +Y, -Y, +Z, -Z]
-    // 我们把 +Y 当作 top, -Y 当作 bottom，其它四面使用 side
     const sideMat = makeMaterialFromTexOrColor(sideTex, COLORS[id] || 0xff00ff, { transparent: transparent, opacity: opacity });
     const topMat = makeMaterialFromTexOrColor(topTex, COLORS[id] || 0xff00ff, { transparent: transparent, opacity: opacity });
     const bottomMat = makeMaterialFromTexOrColor(bottomTex, COLORS[id] || 0xff00ff, { transparent: transparent, opacity: opacity });
@@ -407,7 +435,7 @@ function addBlockMesh(x, y, z, id) {
 }
 
 function renderVisibleBlocks() {
-    const RENDER_DIST = 19;
+    // 使用全局 RENDER_DIST（不要覆盖成不同的常量）
     let camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
     for(let x=0;x<WORLD_W;++x)
      for(let y=0;y<WORLD_H;++y)
@@ -513,9 +541,15 @@ function raycastBlock(maxDist=6) {
         let xi = Math.floor(x), yi=Math.floor(y), zi=Math.floor(z);
         if(xi<0||xi>=WORLD_W||yi<0||yi>=WORLD_H||zi<0||zi>=WORLD_D)continue;
         let t = gameState.blocks[xi][yi][zi];
-        if(t!==null && t!==BLOCK.leaf) {
-            let bx = x-lx*0.08, by = y-ly*0.08, bz = z-lz*0.08;
-            return {x:xi,y:yi,z:zi, px:Math.floor(bx),py:Math.floor(by),pz:Math.floor(bz)};
+        // 修改：只对液体（water, lava）做穿透（忽略），其他包括叶子都阻挡
+        if(t !== null) {
+            if (t === BLOCK.water || t === BLOCK.lava) {
+                // ignore liquids: continue tracing
+                continue;
+            } else {
+                let bx = x-lx*0.08, by = y-ly*0.08, bz = z-lz*0.08;
+                return {x:xi,y:yi,z:zi, px:Math.floor(bx),py:Math.floor(by),pz:Math.floor(bz)};
+            }
         }
     }
     return null;
