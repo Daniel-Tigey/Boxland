@@ -46,45 +46,29 @@ class ValueNoise {
     }
 }
 
-// =========== PerlinNoise (2D) 实现，已加入以修复 missing PerlinNoise 错误 ===========
+// =========== PerlinNoise (2D) 实现 ===========
 class PerlinNoise {
     constructor(seed = 0) {
         this.seed = seed >>> 0;
-        // 构造确定性伪随机数生成器（LCG），用于打乱perm表
         this._rand = (function(s) {
             let state = s >>> 0;
             return function() {
-                // LCG parameters (32-bit)
                 state = (1664525 * state + 1013904223) >>> 0;
                 return state / 4294967296;
             };
         })(this.seed ^ 0x9E3779B9);
-
-        // permutation table 0..255 shuffle, duplicated为512长度以便索引
         this.perm = new Uint8Array(512);
         const p = new Uint8Array(256);
         for (let i = 0; i < 256; i++) p[i] = i;
-        // Fisher-Yates shuffle with deterministic RNG
         for (let i = 255; i > 0; i--) {
             const j = Math.floor(this._rand() * (i + 1));
             const t = p[i]; p[i] = p[j]; p[j] = t;
         }
         for (let i = 0; i < 512; i++) this.perm[i] = p[i & 255];
     }
-
-    // fade curve 6t^5 - 15t^4 + 10t^3 (Perlin 原推荐)
-    fade(t) {
-        return t * t * t * (t * (t * 6 - 15) + 10);
-    }
-
-    // 线性插值
-    lerp(a, b, t) {
-        return a + t * (b - a);
-    }
-
-    // grad: 用表索引产生伪随机梯度并计算点积，返回 -1..1 范围值
+    fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+    lerp(a, b, t) { return a + t * (b - a); }
     grad(hash, x, y) {
-        // 8个方向向量
         const h = hash & 7;
         switch (h) {
             case 0: return  x + y;
@@ -97,31 +81,22 @@ class PerlinNoise {
             default: return -y;
         }
     }
-
-    // 返回范围 0..1 的噪声值（二维）
     noise(x, y) {
-        // 找到单元格坐标和相对坐标
         const X = Math.floor(x) & 255;
         const Y = Math.floor(y) & 255;
         const xf = x - Math.floor(x);
         const yf = y - Math.floor(y);
-
         const u = this.fade(xf);
         const v = this.fade(yf);
-
         const aa = this.perm[X + this.perm[Y]];
         const ab = this.perm[X + this.perm[Y + 1]];
         const ba = this.perm[X + 1 + this.perm[Y]];
         const bb = this.perm[X + 1 + this.perm[Y + 1]];
-
         const x1 = this.lerp(this.grad(aa, xf, yf), this.grad(ba, xf - 1, yf), u);
         const x2 = this.lerp(this.grad(ab, xf, yf - 1), this.grad(bb, xf - 1, yf - 1), u);
-        // Perlin 原输出在大致 -1..1，映射到 0..1
         const result = this.lerp(x1, x2, v) * 0.5 + 0.5;
         return result;
     }
-
-    // 简单的 fbm 实现（用于你的创建地形）
     fbm(x, y, {octaves = 5, gain = 0.5, lacunarity = 2.0, amp = 1, freq = 1} = {}) {
         let sum = 0, totalAmp = 0;
         for (let i = 0; i < octaves; ++i) {
@@ -152,7 +127,7 @@ const BLOCKNAMES = [
 ];
 
 // ==== 贴图文件名key ====
-const BLOCK_TEXTURES = {};
+const BLOCK_TEXTURES = {}; // will map filename -> THREE.Texture
 const BLOCK_TEXTURE_FILES = [
     "grass_soil_top.png", "grass_soil.png", "grass_soil_bottom.png",
     "dirt.png",
@@ -173,24 +148,70 @@ const BLOCK_TEXTURE_FILES = [
     "snow.png",
     "cactus.png"
 ];
+
+// 映射：方块 id -> 使用的贴图文件名（支持 top/side/bottom）
+// 这样就不会再用“数组索引等于方块 id”的错误假设
+const BLOCK_TEXTURE_MAP = {
+    [BLOCK.grass]:   { top: "grass_soil_top.png", side: "grass_soil.png", bottom: "grass_soil_bottom.png" },
+    [BLOCK.dirt]:    { side: "dirt.png" },
+    [BLOCK.stone]:   { side: "stone.png" },
+    [BLOCK.wood]:    { top: "banyan_wood_top.png", side: "banyan_wood.png", bottom: "banyan_wood_bottom.png" },
+    [BLOCK.leaf]:    { side: "leaf.png", transparent: true },
+    [BLOCK.water]:   { side: "water.png", transparent: true, opacity: 0.75 },
+    [BLOCK.bedrock]: { side: "bedrock.png" },
+    [BLOCK.sand]:    { side: "sand.png" },
+    [BLOCK.deep_stone]: { side: "deep_stone.png" },
+    [BLOCK.lava]:    { side: "lava.png", transparent: false },
+    [BLOCK.coal_mine]: { side: "coal_mine.png" },
+    [BLOCK.copper_mine]: { side: "copper_mine.png" },
+    [BLOCK.silver_mine]: { side: "silver_mine.png" },
+    [BLOCK.platinum_mine]: { side: "platinum_mine.png" },
+    [BLOCK.diamond_mine]: { side: "diamond_mine.png" },
+    [BLOCK.ice]:     { side: "ice.png" },
+    [BLOCK.snow]:    { side: "snow.png" },
+    [BLOCK.cactus]:  { side: "cactus.png" }
+};
+
+// 预加载贴图（按文件名 key 存入 BLOCK_TEXTURES）
 function preloadBlockTextures(callback) {
     const loader = new THREE.TextureLoader();
-    let loaded=0, total=BLOCK_TEXTURE_FILES.length;
-    for(let i=0;i<BLOCK_TEXTURE_FILES.length;i++){
-        let file = BLOCK_TEXTURE_FILES[i];
+    let loaded = 0, total = BLOCK_TEXTURE_FILES.length;
+    for (let i = 0; i < BLOCK_TEXTURE_FILES.length; i++) {
+        const file = BLOCK_TEXTURE_FILES[i];
         loader.load(
             "assets/textures/" + file,
-            tex=>{
-                tex.magFilter = tex.minFilter = THREE.NearestFilter;
-                BLOCK_TEXTURES[i]=tex; // i与BLOCK定义顺序一致
-                if(++loaded===total && callback) callback();
+            tex => {
+                // 最近邻过滤（像素风格）
+                tex.magFilter = THREE.NearestFilter;
+                tex.minFilter = THREE.NearestFilter;
+                BLOCK_TEXTURES[file] = tex;
+                if (++loaded === total && callback) callback();
             },
-            undefined, ()=>{
-                BLOCK_TEXTURES[i]=null;
-                if(++loaded===total && callback) callback();
+            undefined,
+            err => {
+                // 加载失败时仍把 key 设为 null，保持计数
+                BLOCK_TEXTURES[file] = null;
+                if (++loaded === total && callback) callback();
             }
         );
     }
+}
+
+// helper: 根据纹理或颜色创建材质（考虑透明/不透明）
+function makeMaterialFromTexOrColor(tex, color, opts = {}) {
+    const matOpts = {};
+    if (tex) {
+        matOpts.map = tex;
+        if (opts.transparent) {
+            matOpts.transparent = true;
+            if (typeof opts.opacity === 'number') matOpts.opacity = opts.opacity;
+            else matOpts.opacity = 1.0;
+        }
+    } else {
+        matOpts.color = color || 0xff00ff;
+    }
+    // 使用漫反射（与你原来用的 MeshLambertMaterial 一致）
+    return new THREE.MeshLambertMaterial(matOpts);
 }
 
 // ===== 512*64*512大地图，渲染距离变量 =====
@@ -199,7 +220,6 @@ let RENDER_DIST = 18; // 默认渲染距离
 const perlin = new PerlinNoise(20230519);
 const valueNoise = new ValueNoise(54188114514);
 function getBiome(x, z) {
-    // Perlin或valueNoise都可，低频即可，控制湿度/温度
     let bio = perlin.noise(x/180, z/180); // 0~1
     if(bio < 0.32)  return "desert";
     if(bio > 0.72)  return "snow";
@@ -207,10 +227,8 @@ function getBiome(x, z) {
 }
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
-// =========== randomOre 函数定义 ===========
+// =========== randomOre 函数定义（保留之前实现） ===========
 function randomOre(x, y, z, type = 'deep_stone') {
-    // 简单地根据深度/位置可以拓展，这里保持轻量：按概率返回矿石或 null
-    // 你可以根据 y （高度）和 type 区分不同矿层概率
     const oreChances = [
         { ore: BLOCK.coal_mine, chance: 0.08 },
         { ore: BLOCK.copper_mine, chance: 0.05 },
@@ -218,12 +236,9 @@ function randomOre(x, y, z, type = 'deep_stone') {
         { ore: BLOCK.platinum_mine, chance: 0.02 },
         { ore: BLOCK.diamond_mine, chance: 0.01 }
     ];
-
-    // 如果传入 type 为 'stone'，可以略微改变概率（示例）
     let modifier = 1.0;
     if (type === 'stone') modifier = 0.75;
     if (type === 'deep_stone') modifier = 1.25;
-
     const totalChance = oreChances.reduce((s, it) => s + it.chance * modifier, 0);
     let roll = Math.random() * totalChance;
     let acc = 0;
@@ -249,7 +264,6 @@ function createWorld() {
 
     for (let x = 0; x < WORLD_W; x++) {
         for (let z = 0; z < WORLD_D; z++) {
-            // 地形高度叠加
             let mtn = perlin.fbm(x/60, z/60, {octaves:6, gain:0.48, lacunarity:1.67});
             let hills = perlin.fbm(x/19, z/19, {octaves:3, gain:0.43, lacunarity:2.12});
             let dunes = valueNoise.fbm(x/7, z/7, {octaves:2, gain:0.4, lacunarity:2.9});
@@ -259,7 +273,6 @@ function createWorld() {
             let h0 = Math.floor(WORLD_H*0.19 + base*WORLD_H*0.73);
             let h = clamp(h0, 5, WORLD_H-2);
 
-            // 群系
             let biome = getBiome(x,z);
             for(let y=0; y<WORLD_H; ++y) blocks[x][y][z] = null;
             for(let y=0; y<bedrockBase; ++y)
@@ -269,11 +282,8 @@ function createWorld() {
                     blocks[x][y][z]=BLOCK.deep_stone;
             for(let y=bedrockBase; y<=h; ++y){
                 let isLow = h < waterLine + 3;
-                // -- 群系地表判定关键 --
-                // 沙漠/雪原水体强制填沙/雪底
                 if(isLow && y >= h-SAND_THICK+1 && biome==="desert") { blocks[x][y][z]=BLOCK.sand; continue; }
-                if(isLow && y >= h-SAND_THICK+1 && biome==="snow") { blocks[x][y][z]=BLOCK.stone; continue;} // 雪原湖底为石，可用雪块自定义
-                // 其它分层如下
+                if(isLow && y >= h-SAND_THICK+1 && biome==="snow") { blocks[x][y][z]=BLOCK.stone; continue;}
                 if(y < bedrockBase + deepslateH || (y < h-6 && h > waterLine+10 && Math.random()<0.25)) {
                     let ore = randomOre(x, y, z);
                     if(ore) blocks[x][y][z]=ore;
@@ -290,25 +300,21 @@ function createWorld() {
                 }
                 if(y < h) { blocks[x][y][z]=BLOCK.dirt; continue; }
                 if(y==h) {
-                    // 顶层：按群系决定表层
                     if(biome==="desert") blocks[x][y][z]=BLOCK.sand;
-                    else if(biome==="snow") blocks[x][y][z]=BLOCK.stone; // 可设置为雪方块（需扩展BLOCK）
+                    else if(biome==="snow") blocks[x][y][z]=BLOCK.stone;
                     else if(isLow) blocks[x][y][z]=BLOCK.sand;
                     else blocks[x][y][z]=BLOCK.grass;
                     continue;
                 }
             }
-            // 水体
             if(h < waterLine-1) for(let y=h+1; y<waterLine; ++y)
                 blocks[x][y][z] = BLOCK.water;
         }
     }
 
-    // 树生长（草原/森林群系添加树，沙漠/雪原极少树或完全无树）
-    for(let i=0; i<400; ++i){ // 树木数量可多些
+    for(let i=0; i<400; ++i){
         let x = Math.floor(Math.random()*(WORLD_W-7)+3), z = Math.floor(Math.random()*(WORLD_D-7)+3);
         let biome = getBiome(x,z);
-        // 沙漠禁止树，雪原罕见树且更小
         if(biome==="desert") continue;
         let snowTree = (biome==="snow");
         let y;
@@ -328,7 +334,6 @@ function createWorld() {
             let dist = Math.abs(lx)+Math.abs(ly-height)+Math.abs(lz);
             let dropP = snowTree ? 0.25+0.07*dist : 0.10+0.04*dist;
             if(Math.random()<dropP) continue;
-            // 雪原的树冠用stone（需要新BLOCK为雪块/冰，这里模拟用stone）
             if(blocks[tx][ty][tz]==null) blocks[tx][ty][tz]=snowTree?BLOCK.stone:BLOCK.leaf;
          }
     }
@@ -373,25 +378,34 @@ function setupThree() {
     renderVisibleBlocks();
 }
 
-// ===== 用贴图渲染方块，如果没贴图则用纯色 =====
+// ===== 用贴图渲染方块（支持顶/侧/底不同贴图、透明） =====
 function addBlockMesh(x, y, z, id) {
     let geometry = new THREE.BoxGeometry(1,1,1);
-    let opts = {}, tex = BLOCK_TEXTURES[id];
-    if(tex) {
-        opts.map = tex;
-        if(id===BLOCK.water || id===BLOCK.leaf) {
-            opts.transparent = true;
-            opts.opacity = 0.75;
-        }
-    } else {
-        opts.color = COLORS[id]||0xff00ff;
-    }
-    let material = new THREE.MeshLambertMaterial(opts);
-    let mesh = new THREE.Mesh(geometry, material);
+
+    // 获取方块的贴图描述
+    const desc = BLOCK_TEXTURE_MAP[id] || {};
+    // 获取对应的 THREE.Texture（可能为 null）
+    const sideTex = desc.side ? BLOCK_TEXTURES[desc.side] : null;
+    const topTex = desc.top ? BLOCK_TEXTURES[desc.top] : sideTex;
+    const bottomTex = desc.bottom ? BLOCK_TEXTURES[desc.bottom] : sideTex;
+    const transparent = !!desc.transparent;
+    const opacity = (typeof desc.opacity === 'number') ? desc.opacity : (transparent ? 0.75 : 1.0);
+
+    // 创建 material：BoxGeometry 的 material 数组顺序为 [+X, -X, +Y, -Y, +Z, -Z]
+    // 我们把 +Y 当作 top, -Y 当作 bottom，其它四面使用 side
+    const sideMat = makeMaterialFromTexOrColor(sideTex, COLORS[id] || 0xff00ff, { transparent: transparent, opacity: opacity });
+    const topMat = makeMaterialFromTexOrColor(topTex, COLORS[id] || 0xff00ff, { transparent: transparent, opacity: opacity });
+    const bottomMat = makeMaterialFromTexOrColor(bottomTex, COLORS[id] || 0xff00ff, { transparent: transparent, opacity: opacity });
+
+    const materials = [ sideMat, sideMat, topMat, bottomMat, sideMat, sideMat ];
+
+    // 创建网格并加入场景
+    let mesh = new THREE.Mesh(geometry, materials);
     mesh.position.set(x,y,z);
     scene.add(mesh);
     blockMeshes.set(`${x}_${y}_${z}`, mesh);
 }
+
 function renderVisibleBlocks() {
     const RENDER_DIST = 19;
     let camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
