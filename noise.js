@@ -114,16 +114,23 @@ const BLOCK = {
     grass: 0, soil: 1, stone: 2, banyan_wood: 3, leaf_00: 4,
     water: 5, bedrock: 6, sand: 7, deep_stone: 8, lava: 9,
     coal_mine: 10, copper_mine: 11, silver_mine: 12, platinum_mine: 13, diamond_mine: 14,
-    ice: 15, snow: 16, cactus: 17
+    ice: 15, snow: 16, cactus: 17,
+    // 新增雪地用的针叶树木材
+    fir_wood: 18
 };
+// 增加一个颜色项用于 fir_wood（可按需调整）
 const COLORS = [
     0x4CAF50,0x8B5A2B,0x888888,0x8B4513,0x19cc19,0x4091F7,0x000000,0xDED39E,0x3A3A3A,
-    0xEF0000,0x222222,0xF18D36,0xBFC7C7,0xc7bb80,0x68e0ff
+    0xEF0000,0x222222,0xF18D36,0xBFC7C7,0xc7bb80,0x68e0ff,
+    0xFFFFFF, // ice (placeholder)
+    0xEEEEEE, // snow (placeholder)
+    0x2E8B57, // cactus (green)
+    0xA0522D  // fir_wood (sienna)
 ];
 const BLOCKNAMES = [
     "grass", "soil", "stone", "banyan_wood", "leaf_00", "water", "bedrock", "sand", "deep_stone",
     "lava", "coal_mine", "copper_mine", "silver_mine", "platinum_mine", "diamond_mine",
-    "ice", "snow", "cactus"
+    "ice", "snow", "cactus", "fir_wood"
 ];
 
 // ==== 贴图文件名key ====
@@ -168,7 +175,8 @@ const BLOCK_TEXTURE_MAP = {
     [BLOCK.diamond_mine]: { side: "diamond_mine.png" },
     [BLOCK.ice]:     { side: "ice.png" },
     [BLOCK.snow]:    { side: "snow.png" },
-    [BLOCK.cactus]:  { side: "cactus.png" }
+    [BLOCK.cactus]:  { side: "cactus.png" },
+    [BLOCK.fir_wood]: { top: "fir_wood_top.png", side: "fir_wood.png", bottom: "fir_wood_bottom.png" } // 新增映射
 };
 
 // 预加载贴图（按文件名 key 存入 BLOCK_TEXTURES）
@@ -206,6 +214,8 @@ function makeMaterialFromTexOrColor(tex, color, opts = {}) {
             if (typeof opts.opacity === 'number') matOpts.opacity = opts.opacity;
             else matOpts.opacity = 1.0;
         }
+        // 为透明贴图启用 alphaTest 可避免渲染排序问题（按需）
+        if (opts.alphaTest) matOpts.alphaTest = opts.alphaTest;
     } else {
         matOpts.color = color || 0xff00ff;
     }
@@ -219,10 +229,11 @@ let RENDER_DIST = 15; // 默认渲染距离
 const perlin = new PerlinNoise(20230519);
 const valueNoise = new ValueNoise(54188114514);
 function getBiome(x, z) {
+    // Perlin低频控制群系：返回 "desert" / "snow" / "forest"
     let bio = perlin.noise(x/180, z/180); // 0~1
     if(bio < 0.32)  return "desert";
     if(bio > 0.72)  return "snow";
-    return "normal";
+    return "forest"; // 原来的 normal -> 现在明确为 forest
 }
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
@@ -235,46 +246,37 @@ function randomOre(x, y, z, type = 'deep_stone') {
     const veinNoise = perlin.noise(x * 0.08, z * 0.08); // 0..1
     const veinFactor = 0.6 + 0.9 * veinNoise; // 0.6..1.5
 
-    // 基础概率随深度变化（示例）
-    // 值为期望的相对权重（不是百分比），在最后按总和归一化
     const weights = [
-        { ore: BLOCK.coal_mine, base: 0.12 * (0.9 + 0.2 * (1 - depthFactor)) },        // 煤：稍偏向浅层/中层
-        { ore: BLOCK.copper_mine, base: 0.07 * (0.9 + 0.4 * (1 - depthFactor)) },      // 铜：浅-中层
-        { ore: BLOCK.silver_mine, base: 0.04 * (0.7 + 0.8 * depthFactor) },            // 银：中深层
-        { ore: BLOCK.platinum_mine, base: 0.02 * (0.5 + 1.2 * depthFactor) },          // 白金：较深层
-        { ore: BLOCK.diamond_mine, base: 0.008 * (0.2 + 5.0 * Math.pow(depthFactor, 3)) } // 钻石：深处强烈增加（立方）
+        { ore: BLOCK.coal_mine, base: 0.12 * (0.9 + 0.2 * (1 - depthFactor)) },
+        { ore: BLOCK.copper_mine, base: 0.07 * (0.9 + 0.4 * (1 - depthFactor)) },
+        { ore: BLOCK.silver_mine, base: 0.04 * (0.7 + 0.8 * depthFactor) },
+        { ore: BLOCK.platinum_mine, base: 0.02 * (0.5 + 1.2 * depthFactor) },
+        { ore: BLOCK.diamond_mine, base: 0.008 * (0.2 + 5.0 * Math.pow(depthFactor, 3)) }
     ];
 
-    // 如果是 stone 层或 deep_stone 层，可加强深层矿物概率（示例）
     let typeModifier = 1.0;
     if (type === 'stone') typeModifier = 0.85;
     if (type === 'deep_stone') typeModifier = 1.25;
 
-    // 将每个权重乘以 veinFactor 和 typeModifier，得到 final weight
     let total = 0;
     for (let w of weights) {
         w.final = w.base * veinFactor * typeModifier;
         total += w.final;
     }
 
-    // 如果 total 非常小（极罕见），直接返回 null
     if (total <= 0) return null;
 
-    // roll 并选择矿物
     let r = Math.random() * total;
     let acc = 0;
     for (let w of weights) {
         acc += w.final;
         if (r < acc) {
-            // 附加条件：非常稀有的矿物可进一步按深度阈值过滤
             if (w.ore === BLOCK.diamond_mine && depthFactor < 0.25) {
-                // 太浅：不要钻石
                 return null;
             }
             return w.ore;
         }
     }
-
     return null;
 }
 
@@ -309,10 +311,13 @@ function createWorld() {
                     blocks[x][y][z]=BLOCK.bedrock;
                 else
                     blocks[x][y][z]=BLOCK.deep_stone;
+
             for(let y=bedrockBase; y<=h; ++y){
                 let isLow = h < waterLine + 3;
+                // 沙漠/雪原水体强制填沙/雪底（调整：雪原底部为 snow）
                 if(isLow && y >= h-SAND_THICK+1 && biome==="desert") { blocks[x][y][z]=BLOCK.sand; continue; }
-                if(isLow && y >= h-SAND_THICK+1 && biome==="snow") { blocks[x][y][z]=BLOCK.stone; continue;}
+                if(isLow && y >= h-SAND_THICK+1 && biome==="snow") { blocks[x][y][z]=BLOCK.snow; continue; }
+                // 其它分层如下
                 if(y < bedrockBase + deepslateH || (y < h-6 && h > waterLine+10 && Math.random()<0.25)) {
                     let ore = randomOre(x, y, z);
                     if(ore) blocks[x][y][z]=ore;
@@ -320,40 +325,78 @@ function createWorld() {
                     continue;
                 }
                 if(y >= h-SAND_THICK+1 && isLow && biome==="desert") { blocks[x][y][z]=BLOCK.sand; continue; }
-                if(y >= h-SAND_THICK+1 && isLow && biome==="snow") { blocks[x][y][z]=BLOCK.stone; continue;}
+                if(y >= h-SAND_THICK+1 && isLow && biome==="snow") { blocks[x][y][z]=BLOCK.snow; continue;}
                 if(y < h-7) {
                     let ore = randomOre(x, y, z, 'stone');
                     if(ore) blocks[x][y][z]=ore;
                     else blocks[x][y][z]=BLOCK.stone;
                     continue;
                 }
-                if(y < h) { blocks[x][y][z]=BLOCK.soil; continue; }
+                // 沙漠的土层也为沙
+                if(y < h) { blocks[x][y][z]= (biome==="desert" ? BLOCK.sand : BLOCK.soil); continue; }
                 if(y==h) {
+                    // 按群系决定表层
                     if(biome==="desert") blocks[x][y][z]=BLOCK.sand;
-                    else if(biome==="snow") blocks[x][y][z]=BLOCK.stone;
-                    else if(isLow) blocks[x][y][z]=BLOCK.sand;
-                    else blocks[x][y][z]=BLOCK.grass;
+                    else if(biome==="snow") blocks[x][y][z]=BLOCK.snow; // 改为雪块
+                    else blocks[x][y][z]=BLOCK.grass; // forest 默认草地
                     continue;
                 }
             }
+            // 水体
             if(h < waterLine-1) for(let y=h+1; y<waterLine; ++y)
                 blocks[x][y][z] = BLOCK.water;
         }
     }
 
+    // 树与植物生成
     for(let i=0; i<400; ++i){
         let x = Math.floor(Math.random()*(WORLD_W-7)+3), z = Math.floor(Math.random()*(WORLD_D-7)+3);
         let biome = getBiome(x,z);
-        if(biome==="desert") continue;
-        let snowTree = (biome==="snow");
+
+        // 找到一个合适的地表高度 y（地表上方应为空）
         let y;
         for(y=WORLD_H-5; y>2; --y)
-            if([BLOCK.grass,BLOCK.soil].includes(blocks[x][y][z]) && blocks[x][y+1][z]==null)
+            if([BLOCK.grass,BLOCK.soil,BLOCK.sand,BLOCK.snow].includes(blocks[x][y][z]) && blocks[x][y+1][z]==null)
                 break;
         if(y<4) continue;
-        let height = snowTree ? 3+Math.floor(valueNoise.noise(x*0.23,z*0.28)*1.6) : 4+Math.floor(valueNoise.noise(x*0.23,z*0.28)*2.8);
-        for(let h2=1;h2<=height;++h2)
-            blocks[x][y+h2][z]=BLOCK.banyan_wood;
+
+        if(biome==="desert") {
+            // 在沙漠中生成仙人掌小概率放置，高度 1~3
+            if(Math.random() < 0.18) { // 生成概率可调
+                let cactusHeight = 1 + Math.floor(Math.random() * 3); // 1-3
+                for(let h2=1; h2<=cactusHeight; ++h2) {
+                    if(y + h2 >= WORLD_H) break;
+                    // 如果上方被阻挡则停止
+                    if(blocks[x][y+h2][z] !== null) break;
+                    blocks[x][y+h2][z] = BLOCK.cactus;
+                }
+            }
+            continue;
+        }
+
+        // 不是沙漠就生成树
+        let snowTree = (biome==="snow");
+        // tree wood type: snow -> fir_wood, forest -> banyan_wood
+        let woodType = snowTree ? BLOCK.fir_wood : BLOCK.banyan_wood;
+        // 雪地矮，森林高
+        let height = snowTree ? 2 + Math.floor(valueNoise.noise(x*0.23,z*0.28)*2.0)
+                              : 4 + Math.floor(valueNoise.noise(x*0.23,z*0.28)*2.8);
+        if(height < 2) height = 2;
+
+        // 如果上方空间不足则跳过
+        let canPlace = true;
+        for(let h2=1; h2<=height+2; ++h2) {
+            let ty = y + h2;
+            if(ty >= WORLD_H) { canPlace = false; break; }
+            if(blocks[x][ty][z] !== null) { canPlace = false; break; }
+        }
+        if(!canPlace) continue;
+
+        // 树干
+        for(let h2=1; h2<=height; ++h2) {
+            blocks[x][y+h2][z] = woodType;
+        }
+        // 叶子
         for(let lx=-2;lx<=2;++lx)
          for(let ly=Math.floor(height/2);ly<=height+2;++ly)
           for(let lz=-2;lz<=2;++lz) {
@@ -363,7 +406,7 @@ function createWorld() {
             let dist = Math.abs(lx)+Math.abs(ly-height)+Math.abs(lz);
             let dropP = snowTree ? 0.25+0.07*dist : 0.10+0.04*dist;
             if(Math.random()<dropP) continue;
-            if(blocks[tx][ty][tz]==null) blocks[tx][ty][tz]=snowTree?BLOCK.stone:BLOCK.leaf_00;
+            if(blocks[tx][ty][tz]==null) blocks[tx][ty][tz]= snowTree ? BLOCK.leaf_07 : BLOCK.leaf_00;
          }
     }
     return blocks;
@@ -541,10 +584,9 @@ function raycastBlock(maxDist=6) {
         let xi = Math.floor(x), yi=Math.floor(y), zi=Math.floor(z);
         if(xi<0||xi>=WORLD_W||yi<0||yi>=WORLD_H||zi<0||zi>=WORLD_D)continue;
         let t = gameState.blocks[xi][yi][zi];
-        // 修改：只对液体（water, lava）做穿透（忽略），其他包括叶子都阻挡
+        // 忽略液体（water, lava）；叶子等会阻挡
         if(t !== null) {
             if (t === BLOCK.water || t === BLOCK.lava) {
-                // ignore liquids: continue tracing
                 continue;
             } else {
                 let bx = x-lx*0.08, by = y-ly*0.08, bz = z-lz*0.08;
