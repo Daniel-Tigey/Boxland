@@ -12,54 +12,73 @@
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             background: linear-gradient(135deg, #3c6e71 10%, #70a9a1 90%);
         }
+        /* 容器：控制所有内容居中 */
+        .content-wrap {
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
         .title {
             font-size: 3.2em;
             letter-spacing: 0.08em;
             margin-bottom: 0.2em;
             margin-top: 0;
             text-shadow:0 2px 16px #0008;
+            text-align: center;
         }
         .subtitle {
             font-size: 1.7em;
             color:#fffbb5;
-            margin-bottom: 1.2em;
+            margin-bottom: 1.8em;
             text-shadow: 0 2px 8px #0009;
+            text-align: center;
         }
-        .main-btn, .start-btn, .setting-btn {
+        /* 统一按钮基础样式，固定宽度长矩形 */
+        .main-btn {
+            width: 260px;
             background: linear-gradient(90deg,#388e3c,#81c784);
             color:#222; border-radius: 1.8em; border:none;
-            padding: 1em 3em; font-size:2em; cursor:pointer;
+            padding: 1em 0; font-size:2em; cursor:pointer;
             font-family: inherit; font-weight:bold;
-            margin-top:1.4em;
-            margin-right:1.4em;
+            margin: 0.8em 0; /* 上下间距，左右无间距 */
             transition:background 0.2s, box-shadow 0.2s;
             box-shadow:0 8px 18px #31514e60;
-            display:inline-block;
+            display:block;
         }
         .main-btn.setting-btn {
             background: linear-gradient(90deg,#1565c0,#81acf7);
-            margin-right: 0;
         }
-        .main-btn:hover, .start-btn:hover, .setting-btn:hover {
+        .main-btn:hover {
             background:#aed581; color:#333; box-shadow:0 7px 40px #31514e90;
+        }
+        /* 设置按钮hover单独配色 */
+        .main-btn.setting-btn:hover {
+            background: #93bcfc;
         }
         .author { opacity:.83; margin-top: 2.8em; font-size:1.15em; color:#eee;}
         .tips {
             margin-top:1.8em; font-size:1em; color:#f6f6f670;
-            font-family:consolas,monospace;}
+            font-family:consolas,monospace;
+        }
         a { color:inherit;text-decoration:none;}
         @media (max-width:560px) {
             .title { font-size:2.2em;}
             .subtitle { font-size:1.05em;}
-            .main-btn, .start-btn, .setting-btn { font-size:1.17em; padding:9px 1.2em;}
+            .main-btn { 
+                font-size:1.17em; 
+                width: 180px;
+                padding: 10px 0;
+            }
         }
     </style>
 </head>
 <body>
 <div class="home-root">
-    <div>
-        <div class="title">Boxland</div>
+    <div class="content-wrap">
+        <div class="title">BOXLAND</div>
         <div class="subtitle">沙盒游戏</div>
+        <!-- 上下垂直排列按钮 -->
         <button class="main-btn start-btn" onclick="location.href='game.html'">进入游戏</button>
         <button class="main-btn setting-btn" onclick="location.href='setting.html'">设置</button>
         <div class="tips">建议电脑端游玩 · 推荐Chrome/Edge/Firefox</div>
