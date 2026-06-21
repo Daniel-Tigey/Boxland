@@ -274,9 +274,6 @@ function randomOre(x, y, z, type = 'deep_stone') {
 }
 
 // =========== World generation ===========
-// ... (createWorld unchanged from previous saved, uses randomOre as above)
-// For brevity I keep createWorld identical to your last version; it's still included in the actual script
-
 function createWorld() {
     const blocks = new Array(WORLD_W);
     for (let x = 0; x < WORLD_W; x++) {
@@ -346,7 +343,7 @@ function createWorld() {
         }
     }
 
-    // Plants and trees (unchanged from prior)
+    // Plants and trees
     for (let i = 0; i < 400; ++i) {
         let x = Math.floor(Math.random() * (WORLD_W - 7) + 3),
             z = Math.floor(Math.random() * (WORLD_D - 7) + 3);
@@ -403,7 +400,7 @@ function createWorld() {
     return blocks;
 }
 
-// ============ 游戏状态 ============
+// ============ 游戏状态 & 初始化 ============
 const HOTBAR_SIZE = 8;
 const DEFAULT_HOTBAR = [
     BLOCK.grass, BLOCK.soil, BLOCK.stone, BLOCK.sand,
@@ -418,10 +415,11 @@ const gameState = {
     fly: false,
     move: { w: 0, a: 0, s: 0, d: 0, up: 0, down: 0 },
     speed: 0.17, size: 0.6,
-    blocks: createWorld(),
+    blocks: null,
     hotbar: DEFAULT_HOTBAR.slice(),
     selectedSlot: 0
 };
+gameState.blocks = createWorld();
 window.gameState = gameState;
 
 // =========== Rendering / Three.js scene & performance caches ===========
@@ -561,19 +559,27 @@ function collidesAt(px, py, pz) {
     return false;
 }
 
-// keep compat canStand but use collidesAt
+// compatible canStand wrapper
 function canStand(nx, ny, nz) {
     return !collidesAt(nx, ny, nz);
 }
 
-// ===== Player movement with axis separation & step-up handling =====
+// ===== Camera & Player movement with axis separation & step-up handling =====
+function updateCamera() {
+    camera.position.set(gameState.px, gameState.py, gameState.pz);
+    let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
+    let ly = Math.sin(gameState.lookV);
+    let lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
+    camera.lookAt(gameState.px + lx, gameState.py + ly, gameState.pz + lz);
+}
+
 function stepPlayer() {
     let ang = gameState.lookH, speed = gameState.speed;
     let dx = 0, dz = 0;
     if (gameState.move.w) { dx += Math.sin(ang) * speed; dz += Math.cos(ang) * speed; }
     if (gameState.move.s) { dx -= Math.sin(ang) * speed; dz -= Math.cos(ang) * speed; }
-    if (gameState.move.a) { dx += Math.sin(ang - Math.PI/2) * speed; dz += Math.cos(ang - Math.PI/2) * speed; }
-    if (gameState.move.d) { dx += Math.sin(ang + Math.PI/2) * speed; dz += Math.cos(ang + Math.PI/2) * speed; }
+    if (gameState.move.a) { dx -= Math.sin(ang - Math.PI/2) * speed; dz += Math.cos(ang - Math.PI/2) * speed; }
+    if (gameState.move.d) { dx -= Math.sin(ang + Math.PI/2) * speed; dz += Math.cos(ang + Math.PI/2) * speed; }
 
     let px = gameState.px, py = gameState.py, pz = gameState.pz;
     // vertical velocity
@@ -582,12 +588,11 @@ function stepPlayer() {
     }
     let dy = gameState.fly ? ((gameState.move.up ? speed : 0) - (gameState.move.down ? speed : 0)) : gameState.vy;
 
-    // 1) vertical move (apply gravity/jump)
+    // 1) vertical move
     let newY = py + dy;
     if (!collidesAt(px, newY, pz)) {
         py = newY;
     } else {
-        // hit ceiling or ground -> reset vy
         if (!gameState.fly) gameState.vy = 0;
         // try small upward adjustments to avoid sinking into blocks
         let stepped = false;
@@ -595,13 +600,12 @@ function stepPlayer() {
             if (!collidesAt(px, py + t, pz)) { py = py + t; stepped = true; break; }
         }
         if (!stepped) {
-            // keep py
+            // keep py as is
         }
     }
 
-    // helper for step-up attempts when horizontal blocked
+    // helper for step-up attempts
     const tryStepMove = (targetX, targetY, targetZ, maxStep = 0.5) => {
-        // try small upward steps (simulate stepping up small ledge)
         if (!collidesAt(targetX, targetY, targetZ)) return { success: true, nx: targetX, ny: targetY, nz: targetZ };
         for (let step = 0.05; step <= maxStep; step += 0.05) {
             if (!collidesAt(targetX, targetY + step, targetZ) && !collidesAt(targetX, targetY + step + 0.85, targetZ)) {
@@ -611,28 +615,18 @@ function stepPlayer() {
         return { success: false };
     };
 
-    // 2) horizontal movement: separate axes to avoid corner clipping
-    // attempt X
+    // 2) horizontal movement: separate axes
     if (dx !== 0) {
         let res = tryStepMove(px + dx, py, pz);
-        if (res.success) {
-            px = res.nx; py = res.ny; pz = res.nz;
-        } else {
-            // blocked in X; do nothing for X
-        }
+        if (res.success) { px = res.nx; py = res.ny; pz = res.nz; }
     }
-
-    // attempt Z
     if (dz !== 0) {
         let res = tryStepMove(px, py, pz + dz);
-        if (res.success) {
-            px = res.nx; py = res.ny; pz = res.nz;
-        } else {
-            // If separate axes blocked, try diagonal combined (allows sliding along corner)
+        if (res.success) { px = res.nx; py = res.ny; pz = res.nz; }
+        else {
+            // try diagonal
             let res2 = tryStepMove(px + dx, py, pz + dz);
-            if (res2.success) {
-                px = res2.nx; py = res2.ny; pz = res2.nz;
-            }
+            if (res2.success) { px = res2.nx; py = res2.ny; pz = res2.nz; }
         }
     }
 
@@ -644,6 +638,178 @@ function stepPlayer() {
     Object.assign(gameState, { px, py, pz });
 }
 
-// rest of rendering + raycast/input + Vue UI unchanged (kept from previous optimized script)
-// For brevity, please merge the rest of the previously provided optimized script (setupThree, addBlockMesh, renderVisibleBlocks, animate, raycastBlock, setupInput, Vue boot) unchanged.
-// The full file should include everything from the prior optimized version, but with the above updated collidesAt/canStand/stepPlayer and modified randomOre.
+// animate with renderVisibleBlocks throttled to camera cell changes
+function animate() {
+    requestAnimationFrame(animate);
+    stepPlayer();
+
+    const camCellX = Math.floor(gameState.px), camCellY = Math.floor(gameState.py), camCellZ = Math.floor(gameState.pz);
+    if (camCellX !== lastCameraCell.x || camCellY !== lastCameraCell.y || camCellZ !== lastCameraCell.z) {
+        lastCameraCell.x = camCellX; lastCameraCell.y = camCellY; lastCameraCell.z = camCellZ;
+        renderVisibleBlocks();
+    }
+
+    updateCamera();
+    renderer && renderer.render(scene, camera);
+}
+
+// ===== Raycast and input handling (liquids ignored) =====
+function raycastBlock(maxDist = 6) {
+    let ox = gameState.px, oy = gameState.py + 0.6, oz = gameState.pz;
+    let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
+    let ly = Math.sin(gameState.lookV);
+    let lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
+    for (let i = 0; i < maxDist * 15; i++) {
+        let d = i * 0.07;
+        let x = ox + lx * d, y = oy + ly * d, z = oz + lz * d;
+        let xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+        if (xi < 0 || xi >= WORLD_W || yi < 0 || yi >= WORLD_H || zi < 0 || zi >= WORLD_D) continue;
+        let t = gameState.blocks[xi][yi][zi];
+        if (t !== null) {
+            if (t === BLOCK.water || t === BLOCK.lava) {
+                continue; // liquids are ignored by raycast
+            } else {
+                let bx = x - lx * 0.08, by = y - ly * 0.08, bz = z - lz * 0.08;
+                return { x: xi, y: yi, z: zi, px: Math.floor(bx), py: Math.floor(by), pz: Math.floor(bz) };
+            }
+        }
+    }
+    return null;
+}
+
+function onMousedown(e) {
+    if (!gameState.pointerLocked) return;
+    const hit = raycastBlock();
+    if (!hit) return;
+    if (e.button == 0) {
+        if (gameState.blocks[hit.x][hit.y][hit.z] !== BLOCK.bedrock) {
+            gameState.blocks[hit.x][hit.y][hit.z] = null;
+            removeBlockMesh(hit.x, hit.y, hit.z);
+        }
+    }
+    if (e.button == 2) {
+        let { px, py, pz } = hit;
+        if (px < 0 || px >= WORLD_W || py < 0 || py >= WORLD_H || pz < 0 || pz >= WORLD_D) return;
+        if (gameState.blocks[px][py][pz] == null
+            && Math.abs(px - gameState.px) > 0.7
+            && Math.abs(py - gameState.py) > 1.0
+            && Math.abs(pz - gameState.pz) > 0.7) {
+            let id = gameState.hotbar[gameState.selectedSlot];
+            gameState.blocks[px][py][pz] = id;
+            addBlockMesh(px, py, pz, id);
+        }
+    }
+}
+function onContextMenu(e) { e.preventDefault(); }
+
+function setupInput() {
+    renderer.domElement.addEventListener('click', () => renderer.domElement.requestPointerLock());
+    document.addEventListener('pointerlockchange', () => {
+        let locked = (document.pointerLockElement === renderer.domElement);
+        gameState.pointerLocked = locked;
+        if (locked) gameState.showInfo = false;
+    });
+    document.addEventListener('mousemove', e => {
+        if (!gameState.pointerLocked) return;
+        gameState.lookH += e.movementX * 0.002;
+        gameState.lookV -= e.movementY * 0.002;
+        let V = Math.PI / 2 * 0.99;
+        if (gameState.lookV < -V) gameState.lookV = -V;
+        if (gameState.lookV > V) gameState.lookV = V;
+    });
+    window.addEventListener('keydown', e => {
+        if (/^Digit[1-8]$/.test(e.code)) gameState.selectedSlot = Number(e.code.slice(-1)) - 1;
+        if (e.code === 'KeyW') gameState.move.w = 1;
+        if (e.code === 'KeyA') gameState.move.a = 1;
+        if (e.code === 'KeyS') gameState.move.s = 1;
+        if (e.code === 'KeyD') gameState.move.d = 1;
+        if (e.code === 'Space') {
+            if (gameState.fly) gameState.move.up = 1;
+            else if (gameState.vy === 0 && canStand(gameState.px, gameState.py - 0.2, gameState.pz)) gameState.vy = 0.32;
+        }
+        if (e.code === 'ShiftLeft') gameState.move.down = 1;
+        if (e.code === 'KeyF') gameState.fly = !gameState.fly;
+        if (e.code === 'Escape') { document.exitPointerLock && document.exitPointerLock(); }
+    });
+    window.addEventListener('keyup', e => {
+        if (e.code === 'KeyW') gameState.move.w = 0;
+        if (e.code === 'KeyA') gameState.move.a = 0;
+        if (e.code === 'KeyS') gameState.move.s = 0;
+        if (e.code === 'KeyD') gameState.move.d = 0;
+        if (e.code === 'Space') gameState.move.up = 0;
+        if (e.code === 'ShiftLeft') gameState.move.down = 0;
+    });
+    window.addEventListener('wheel', e => {
+        let sz = gameState.hotbar.length;
+        if (sz > 0) {
+            if (e.deltaY > 0) gameState.selectedSlot = (gameState.selectedSlot + 1) % sz;
+            if (e.deltaY < 0) gameState.selectedSlot = (gameState.selectedSlot + sz - 1) % sz;
+            e.preventDefault();
+        }
+    }, { passive: false });
+    window.addEventListener('mousedown', onMousedown);
+    window.addEventListener('contextmenu', onContextMenu);
+}
+
+// block name helper
+function blockName(id) {
+    let idx = Object.values(BLOCK).indexOf(id);
+    return BLOCKNAMES[idx] || "未知";
+}
+
+// Vue UI + boot
+const { createApp } = Vue;
+createApp({
+  setup() {
+      return {
+        pointerLocked: Vue.computed(() => gameState.pointerLocked),
+        showInfo: Vue.computed(() => gameState.showInfo),
+        hotbar: Vue.computed(() => gameState.hotbar),
+        selectedSlot: Vue.computed(() => gameState.selectedSlot),
+        COLORS, blockName
+      };
+  },
+  mounted() {
+      preloadBlockTextures(() => {
+          setupThree();
+          setupInput();
+          renderVisibleBlocks();
+          animate();
+      });
+  },
+  template: `
+  <div>
+    <slot></slot>
+    <div v-if="showInfo && !pointerLocked"
+         style="position:fixed;top:0;left:0;background:rgba(0,0,0,0.7);color:#fff;padding:6px 20px;font-size:15px;z-index:20;">
+        <b>WASD/空格/Shift</b> 移动 | <b>鼠标左/右</b> 挖掘/放置 | <b>鼠标</b> 转头 <br>
+        <b>1-8</b>/滚轮快速切换物品栏 &nbsp; <b>F</b>飞行 &nbsp; <b>Esc</b> 退出 <br>
+        单击画面进入游戏
+    </div>
+    <div style="position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:25;display:flex;gap:8px;">
+      <div v-for="(bid,i) in hotbar" :key="i"
+           :style="{
+            width:'42px',height:'42px',
+            margin:'0 3px',position:'relative',
+            border:'3px solid '+(i===selectedSlot?'#efb637':'#999'),
+            background:'#f1efea',borderRadius:'7px',boxShadow:i===selectedSlot?'0 0 12px #ffc':'' }">
+        <div :style="{
+              width:'100%',height:'100%',
+              display:'flex',alignItems:'center',justifyContent:'center',
+              fontWeight:'bold',fontSize:'1.0em',color:'#222',zIndex:2
+          }">{{ blockName(bid) }}</div>
+        <div v-if="COLORS[bid]" :style="{
+          position:'absolute',left:'7px',top:'6px',zIndex:1,
+          width:'26px',height:'26px',
+          background:'#'+(COLORS[bid].toString(16).padStart(6,'0')),
+          border:'2px solid #7e6332',borderRadius:'5px'
+        }"></div>
+        <div v-if="i===selectedSlot" style="
+            position:absolute;left:-5px;top:-5px;width:51px;height:51px;pointer-events:none;
+            border:2.2px solid #ffe26a;border-radius:8px;box-shadow:0 0 18px 0 #ffe26a88;
+          "></div>
+      </div>
+    </div>
+  </div>
+  `
+}).mount("#app");
