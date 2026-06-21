@@ -155,8 +155,8 @@ function getSettings() {
 function saveSettings() {
   localStorage.setItem('renderDistance', document.getElementById('dist-slider').value);
   localStorage.setItem('keymap', JSON.stringify(currKeymap));
-  alert("设置已保存！将跳转回游戏...");
-  location.href = 'game.html';
+  alert("设置已保存！将跳转回主页...");
+  location.href = 'index.html';
 }
 function resetToDefault() {
   if(!confirm("是否恢复所有按键和渲染距离为默认？")) return;
