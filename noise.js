@@ -1,4 +1,3 @@
-// 将此文件保存为 world_fixed_full.js 并替换原脚本
 // --- ValueNoise + Worley分型地形 FBM/Worley Cellular Noise ----
 class ValueNoise {
     constructor(seed = 1) { this.seed = seed; }
@@ -596,8 +595,9 @@ function stepPlayer() {
     let dx = 0, dz = 0;
     if (gameState.move.w) { dx += Math.sin(ang) * speed; dz += Math.cos(ang) * speed; }
     if (gameState.move.s) { dx -= Math.sin(ang) * speed; dz -= Math.cos(ang) * speed; }
-    if (gameState.move.a) { dx += Math.sin(ang - Math.PI/2) * speed; dz += Math.cos(ang - Math.PI/2) * speed; }
-    if (gameState.move.d) { dx += Math.sin(ang + Math.PI/2) * speed; dz += Math.cos(ang + Math.PI/2) * speed; }
+    if (gameState.move.a) { dx -= Math.sin(ang + Math.PI/2) * speed; dz += Math.cos(ang + Math.PI/2) * speed; }
+    if (gameState.move.d) { dx -= Math.sin(ang - Math.PI/2) * speed; dz += Math.cos(ang - Math.PI/2) * speed; }
+    // A, D不要改(上面)
 
     let px = gameState.px, py = gameState.py, pz = gameState.pz;
     if (!gameState.fly) gameState.vy -= 0.011;
