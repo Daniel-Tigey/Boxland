@@ -1,3 +1,7 @@
+// world_complete.js
+// 完整脚本：噪声、地形、群系（forest/desert/snow/mountain）、矿脉、岩浆、渲染优化、碰撞、输入、UI
+// 直接保存替换你的主脚本（例如 world.js / world_fixed_full.js）。
+
 // --- ValueNoise + Worley分型地形 FBM/Worley Cellular Noise ----
 class ValueNoise {
     constructor(seed = 1) { this.seed = seed; }
@@ -210,24 +214,23 @@ function makeMaterialFromTexOrColor(tex, color, opts = {}) {
 }
 
 // ===== World constants =====
-const WORLD_W = 512, WORLD_D = 512, WORLD_H = 100, SAND_THICK = 3; // HEIGHT <- 100
-let RENDER_DIST = 15; // 可调整渲染距离（越大越耗性能）
+const WORLD_W = 512, WORLD_D = 512, WORLD_H = 100, SAND_THICK = 3;
+let RENDER_DIST = 15; // 可调整渲染距离
 const perlin = new PerlinNoise(20230519);
 const valueNoise = new ValueNoise(54188114514);
 
-// Biome: forest / desert / snow / mountain (mountain新增)
+// Biome: forest / desert / snow / mountain
 function getBiome(x, z) {
     let bio = perlin.noise(x/180, z/180);
-    // mountainMask separate low-frequency
-    let mountainMask = perlin.noise(x/200, z/200);
+    let mountainMask = perlin.noise(x/160, z/160); // lower frequency but denser
     if (bio < 0.27) return "desert";
     if (bio > 0.75) return "snow";
-    if (mountainMask > 0.78) return "mountain"; // mountain 分布稀疏
+    if (mountainMask > 0.68) return "mountain";
     return "forest";
 }
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
-// =========== randomOre（保留之前门槛逻辑） ===========
+// =========== randomOre（按深度+噪声聚簇，带生成门槛） ===========
 function randomOre(x, y, z, type = 'deep_stone') {
     const depthFactor = clamp(1 - (y / (WORLD_H - 1)), 0, 1);
     const veinNoise = perlin.noise(x * 0.08, z * 0.08);
@@ -248,7 +251,7 @@ function randomOre(x, y, z, type = 'deep_stone') {
     let total = 0;
     for (let w of weights) { w.final = w.base * veinFactor * typeModifier; total += w.final; }
     if (total <= 0) return null;
-    let r = Math.random() * total; let acc = 0;
+    let r = Math.random() * total, acc = 0;
     for (let w of weights) {
         acc += w.final;
         if (r < acc) {
@@ -259,7 +262,7 @@ function randomOre(x, y, z, type = 'deep_stone') {
     return null;
 }
 
-// =========== World generation（修改：较小起伏 + mountain 支持 + 更多仙人掌） ===========
+// =========== createWorld（完整实现，含分层 30% stone / 70% deep_stone） ===========
 function createWorld() {
     const blocks = new Array(WORLD_W);
     for (let x = 0; x < WORLD_W; x++) {
@@ -280,58 +283,110 @@ function createWorld() {
             let river = 1 - valueNoise.worley(x/23, z/23, 6);
             let island = Math.max(0, valueNoise.fbm(x/100, z/100, {octaves:2, gain:0.8, lacunarity:2.2}));
 
-            // combine with reduced amplitude factor to make overall smoother
+            // combine with reduced amplitude to make smoother terrain
             let base = (0.44*mtn + 0.2*hills + 0.09*dunes + 0.12*river + 0.15*island);
-            // previous multiplier was large; reduce amplitude by using smaller factor
-            let h0 = Math.floor(WORLD_H*0.28 + base * WORLD_H * 0.20);  //  起伏
+            let h0 = Math.floor(WORLD_H*0.28 + base * WORLD_H * 0.30);
             let h = clamp(h0, 5, WORLD_H - 2);
 
             let biome = getBiome(x, z);
 
-            // If mountain biome, override height to be higher and concentrated 50..80
+            // mountain override: ensure mountain stands out at least +10
             if (biome === "mountain") {
-                // mountain height noise, higher-frequency to create peaks
-                let mountainNoise = perlin.fbm(x/28, z/28, {octaves:4, gain:0.5, lacunarity:2.0});
-                // produce height in [50,80]
-                let mh = 50 + Math.floor(mountainNoise * 30);
-                h = clamp(mh, 50, 80);
+                let mountainNoise = perlin.fbm(x/24, z/24, {octaves:5, gain:0.5, lacunarity:2.0});
+                let mh = 50 + Math.floor(mountainNoise * 30); // 50..80
+                h = Math.max(h + 10, clamp(mh, 50, 80));
             }
 
-            // base filling
+            // base filling (bedrock)
             for (let y = 0; y < bedrockBase; ++y) {
                 blocks[x][y][z] = (Math.random() < 0.66 || y === 0) ? BLOCK.bedrock : BLOCK.deep_stone;
             }
 
+            // define underground band for stratification:
+            // undergroundStart .. undergroundEnd inclusive
+            const undergroundStart = bedrockBase + deepslateH; // start index for stratified band
+            const undergroundEnd = Math.max(bedrockBase + 1, h - 7); // top of band (just below surface band)
+            const undergroundHeight = Math.max(1, undergroundEnd - undergroundStart + 1);
+            const STONE_TOP_RATIO = 0.30; // top 30% -> stone; bottom 70% -> deep_stone
+
             for (let y = bedrockBase; y <= h; ++y) {
                 let isLow = h < waterLine + 3;
 
-                // desert/snow low region sand/snow
+                // surface sand / snow for low biomes
                 if (isLow && y >= h - SAND_THICK + 1 && biome === "desert") { blocks[x][y][z] = BLOCK.sand; continue; }
                 if (isLow && y >= h - SAND_THICK + 1 && biome === "snow") { blocks[x][y][z] = BLOCK.snow; continue; }
 
                 // deep layers / deepslate
                 if (y < bedrockBase + deepslateH || (y < h - 6 && h > waterLine + 10 && Math.random() < 0.25)) {
+                    // try ore first
                     let ore = randomOre(x, y, z, 'deep_stone');
-                    blocks[x][y][z] = ore ? ore : BLOCK.deep_stone;
-                    continue;
+                    if (ore) {
+                        blocks[x][y][z] = ore;
+                        continue;
+                    }
+                    // stratification: if within band, compute fraction position
+                    if (y >= undergroundStart && y <= undergroundEnd) {
+                        const posInBand = y - undergroundStart; // 0 .. undergroundHeight-1
+                        const frac = (undergroundHeight > 1) ? (posInBand / (undergroundHeight - 1)) : 0;
+                        if (frac < STONE_TOP_RATIO) {
+                            // top fraction => stone
+                            blocks[x][y][z] = BLOCK.stone;
+                        } else {
+                            // bottom fraction => deep_stone, with chance for lava in very deep areas
+                            if (y <= 12) {
+                                let lavaCluster = 1 - valueNoise.worley(x/10, z/10, 6);
+                                if (Math.random() < 0.015 * (0.6 + 1.4 * lavaCluster)) {
+                                    blocks[x][y][z] = BLOCK.lava;
+                                    continue;
+                                }
+                            }
+                            blocks[x][y][z] = BLOCK.deep_stone;
+                        }
+                        continue;
+                    } else {
+                        // outside stratified band
+                        if (y <= bedrockBase + deepslateH - 1) {
+                            // near bedrock: favor deep_stone with chance of lava
+                            if (Math.random() < 0.70) {
+                                if (y <= 12) {
+                                    let lavaCluster = 1 - valueNoise.worley(x/10, z/10, 6);
+                                    if (Math.random() < 0.015 * (0.6 + 1.4 * lavaCluster)) {
+                                        blocks[x][y][z] = BLOCK.lava;
+                                        continue;
+                                    }
+                                }
+                                blocks[x][y][z] = BLOCK.deep_stone;
+                            } else {
+                                blocks[x][y][z] = BLOCK.stone;
+                            }
+                        } else {
+                            // fallback default
+                            blocks[x][y][z] = BLOCK.deep_stone;
+                        }
+                        continue;
+                    }
                 }
 
+                // near-surface sand/snow (handled)
                 if (y >= h - SAND_THICK + 1 && isLow && biome === "desert") { blocks[x][y][z] = BLOCK.sand; continue; }
                 if (y >= h - SAND_THICK + 1 && isLow && biome === "snow") { blocks[x][y][z] = BLOCK.snow; continue; }
 
-                // middle stone zone
+                // upper underground: ore sampling then mostly stone (bias toward stone)
                 if (y < h - 7) {
                     let ore = randomOre(x, y, z, 'stone');
-                    blocks[x][y][z] = ore ? ore : BLOCK.stone;
+                    if (ore) {
+                        blocks[x][y][z] = ore;
+                    } else {
+                        // bias: 85% stone, 15% deep_stone in upper underground
+                        blocks[x][y][z] = (Math.random() < 0.85) ? BLOCK.stone : BLOCK.deep_stone;
+                    }
                     continue;
                 }
 
-                // near-surface layers
+                // near-surface: soil or mountain specific mixing
                 if (y < h) {
-                    // for mountain: mix soil and stone with higher chance of stone near top
                     if (biome === "mountain") {
-                        // probability of stone increases closer to top
-                        let stoneProb = 0.25 + 0.2 * ((y - (h - 7)) / 7); // 0.25..0.45 roughly
+                        let stoneProb = 0.35 + 0.4 * ((y - (h - 7)) / 7); // stronger stone near top
                         if (Math.random() < stoneProb) blocks[x][y][z] = BLOCK.stone;
                         else blocks[x][y][z] = BLOCK.soil;
                     } else {
@@ -340,30 +395,24 @@ function createWorld() {
                     continue;
                 }
 
-                // top block y == h
+                // top block
                 if (y == h) {
-                    if (biome === "desert") {
-                        blocks[x][y][z] = BLOCK.sand;
-                    } else if (biome === "snow") {
-                        blocks[x][y][z] = BLOCK.snow;
-                    } else if (biome === "mountain") {
-                        // mountain tops accumulate snow
-                        blocks[x][y][z] = BLOCK.snow;
-                    } else {
-                        blocks[x][y][z] = BLOCK.grass;
-                    }
+                    if (biome === "desert") blocks[x][y][z] = BLOCK.sand;
+                    else if (biome === "snow") blocks[x][y][z] = BLOCK.snow;
+                    else if (biome === "mountain") blocks[x][y][z] = BLOCK.snow;
+                    else blocks[x][y][z] = BLOCK.grass;
                     continue;
                 }
             }
 
-            // water
+            // water fill
             if (h < waterLine - 1) {
                 for (let y = h + 1; y < waterLine; ++y) blocks[x][y][z] = BLOCK.water;
             }
         }
     }
 
-    // Plants and trees (调整仙人掌密度)
+    // Plants and trees (denser cactus in desert)
     for (let i = 0; i < 400; ++i) {
         let x = Math.floor(Math.random() * (WORLD_W - 7) + 3),
             z = Math.floor(Math.random() * (WORLD_D - 7) + 3);
@@ -377,9 +426,8 @@ function createWorld() {
         if (y < 4) continue;
 
         if (biome === "desert") {
-            // cactus probability increased to be denser
-            if (Math.random() < 0.38) { // was 0.18 -> now 0.38
-                let cactusHeight = 1 + Math.floor(Math.random() * 4); // allow up to 4 tall
+            if (Math.random() < 0.38) {
+                let cactusHeight = 1 + Math.floor(Math.random() * 4);
                 for (let h2 = 1; h2 <= cactusHeight; ++h2) {
                     if (y + h2 >= WORLD_H) break;
                     if (blocks[x][y+h2][z] !== null) break;
@@ -450,7 +498,6 @@ const SHARED_GEOMETRY = new THREE.BoxGeometry(1, 1, 1);
 const MATERIAL_CACHE = new Map();
 let lastCameraCell = { x: -9999, y: -9999, z: -9999 };
 
-// setupThree
 function setupThree() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x81D4FA);
@@ -465,7 +512,6 @@ function setupThree() {
     blockMeshes = new Map();
 }
 
-// optimized addBlockMesh
 function addBlockMesh(x, y, z, id) {
     const key = `${x}_${y}_${z}`;
     if (blockMeshes.has(key)) return;
@@ -496,7 +542,6 @@ function addBlockMesh(x, y, z, id) {
     blockMeshes.set(key, mesh);
 }
 
-// renderVisibleBlocks
 function renderVisibleBlocks() {
     const camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
     const minX = Math.max(0, camX - RENDER_DIST), maxX = Math.min(WORLD_W - 1, camX + RENDER_DIST);
@@ -552,7 +597,7 @@ window.addEventListener('resize', () => {
     camera.updateProjectionMatrix();
 });
 
-// ===== Collision & movement (AABB, step-up) =====
+// ===== Collision & movement (AABB + step-up) =====
 function collidesAt(px, py, pz) {
     const r = 0.29;
     const minX = Math.floor(px - r);
@@ -608,9 +653,8 @@ function stepPlayer() {
         py = newY;
     } else {
         if (!gameState.fly) gameState.vy = 0;
-        let stepped = false;
         for (let t = 0.05; t <= 0.5; t += 0.05) {
-            if (!collidesAt(px, py + t, pz)) { py = py + t; stepped = true; break; }
+            if (!collidesAt(px, py + t, pz)) { py = py + t; break; }
         }
     }
 
