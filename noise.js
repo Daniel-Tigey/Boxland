@@ -210,35 +210,31 @@ function makeMaterialFromTexOrColor(tex, color, opts = {}) {
 }
 
 // ===== World constants =====
-const WORLD_W = 512, WORLD_D = 512, WORLD_H = 64, SAND_THICK = 3;
+const WORLD_W = 512, WORLD_D = 512, WORLD_H = 100, SAND_THICK = 3; // HEIGHT <- 100
 let RENDER_DIST = 15; // 可调整渲染距离（越大越耗性能）
 const perlin = new PerlinNoise(20230519);
 const valueNoise = new ValueNoise(54188114514);
 
-// Biome: forest / desert / snow
+// Biome: forest / desert / snow / mountain (mountain新增)
 function getBiome(x, z) {
     let bio = perlin.noise(x/180, z/180);
-    if (bio < 0.32) return "desert";
-    if (bio > 0.72) return "snow";
+    // mountainMask separate low-frequency
+    let mountainMask = perlin.noise(x/200, z/200);
+    if (bio < 0.27) return "desert";
+    if (bio > 0.75) return "snow";
+    if (mountainMask > 0.78) return "mountain"; // mountain 分布稀疏
     return "forest";
 }
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
-// =========== randomOre（改：先按位置门槛再采样权重） ===========
+// =========== randomOre（保留之前门槛逻辑） ===========
 function randomOre(x, y, z, type = 'deep_stone') {
-    // depthFactor: 0 at top, 1 at bottom
     const depthFactor = clamp(1 - (y / (WORLD_H - 1)), 0, 1);
-
-    // vein clustering factor (较低频)
-    const veinNoise = perlin.noise(x * 0.08, z * 0.08); // 0..1
-    const veinFactor = 0.6 + 0.9 * veinNoise; // 0.6..1.5
-
-    // 总体生成概率门槛：prevent ores everywhere
-    const baseOreChance = 0.06; // 基础每方块生成矿脉的概率尺度（更小 => 更稀有）
+    const veinNoise = perlin.noise(x * 0.08, z * 0.08);
+    const veinFactor = 0.6 + 0.9 * veinNoise;
+    const baseOreChance = 0.06;
     const spawnChance = baseOreChance * veinFactor * (type === 'deep_stone' ? 1.6 : (type === 'stone' ? 0.8 : 1.0));
-    if (Math.random() >= spawnChance) return null; // 大多数方块直接不生成矿石
-
-    // 权重（按深度调整）
+    if (Math.random() >= spawnChance) return null;
     const weights = [
         { ore: BLOCK.coal_mine, base: 0.12 * (0.9 + 0.2 * (1 - depthFactor)) },
         { ore: BLOCK.copper_mine, base: 0.07 * (0.9 + 0.4 * (1 - depthFactor)) },
@@ -246,41 +242,29 @@ function randomOre(x, y, z, type = 'deep_stone') {
         { ore: BLOCK.platinum_mine, base: 0.02 * (0.5 + 1.2 * depthFactor) },
         { ore: BLOCK.diamond_mine, base: 0.008 * (0.2 + 5.0 * Math.pow(depthFactor, 3)) }
     ];
-
-    // 类型修正
     let typeModifier = 1.0;
     if (type === 'stone') typeModifier = 0.85;
     if (type === 'deep_stone') typeModifier = 1.25;
-
-    // 计算 final 权重
     let total = 0;
-    for (let w of weights) {
-        w.final = w.base * veinFactor * typeModifier;
-        total += w.final;
-    }
+    for (let w of weights) { w.final = w.base * veinFactor * typeModifier; total += w.final; }
     if (total <= 0) return null;
-
-    // 按权重选择
-    let r = Math.random() * total;
-    let acc = 0;
+    let r = Math.random() * total; let acc = 0;
     for (let w of weights) {
         acc += w.final;
         if (r < acc) {
-            if (w.ore === BLOCK.diamond_mine && depthFactor < 0.25) return null; // 钻石深度约束
+            if (w.ore === BLOCK.diamond_mine && depthFactor < 0.25) return null;
             return w.ore;
         }
     }
     return null;
 }
 
-// =========== World generation ===========
+// =========== World generation（修改：较小起伏 + mountain 支持 + 更多仙人掌） ===========
 function createWorld() {
     const blocks = new Array(WORLD_W);
     for (let x = 0; x < WORLD_W; x++) {
         blocks[x] = new Array(WORLD_H);
-        for (let y = 0; y < WORLD_H; y++) {
-            blocks[x][y] = new Array(WORLD_D).fill(null);
-        }
+        for (let y = 0; y < WORLD_H; y++) blocks[x][y] = new Array(WORLD_D).fill(null);
     }
 
     const waterLine = Math.floor(WORLD_H * 0.26);
@@ -289,26 +273,43 @@ function createWorld() {
 
     for (let x = 0; x < WORLD_W; x++) {
         for (let z = 0; z < WORLD_D; z++) {
+            // noises
             let mtn = perlin.fbm(x/60, z/60, {octaves:6, gain:0.48, lacunarity:1.67});
             let hills = perlin.fbm(x/19, z/19, {octaves:3, gain:0.43, lacunarity:2.12});
             let dunes = valueNoise.fbm(x/7, z/7, {octaves:2, gain:0.4, lacunarity:2.9});
             let river = 1 - valueNoise.worley(x/23, z/23, 6);
             let island = Math.max(0, valueNoise.fbm(x/100, z/100, {octaves:2, gain:0.8, lacunarity:2.2}));
-            let base = 0.44*mtn + 0.2*hills + 0.09*dunes + 0.12*river + 0.15*island;
-            let h0 = Math.floor(WORLD_H*0.19 + base*WORLD_H*0.73);
-            let h = clamp(h0, 5, WORLD_H-2);
+
+            // combine with reduced amplitude factor to make overall smoother
+            let base = (0.44*mtn + 0.2*hills + 0.09*dunes + 0.12*river + 0.15*island);
+            // previous multiplier was large; reduce amplitude by using smaller factor
+            let h0 = Math.floor(WORLD_H*0.28 + base * WORLD_H * 0.40);
+            let h = clamp(h0, 5, WORLD_H - 2);
 
             let biome = getBiome(x, z);
 
+            // If mountain biome, override height to be higher and concentrated 50..80
+            if (biome === "mountain") {
+                // mountain height noise, higher-frequency to create peaks
+                let mountainNoise = perlin.fbm(x/28, z/28, {octaves:4, gain:0.5, lacunarity:2.0});
+                // produce height in [50,80]
+                let mh = 50 + Math.floor(mountainNoise * 30);
+                h = clamp(mh, 50, 80);
+            }
+
+            // base filling
             for (let y = 0; y < bedrockBase; ++y) {
                 blocks[x][y][z] = (Math.random() < 0.66 || y === 0) ? BLOCK.bedrock : BLOCK.deep_stone;
             }
 
             for (let y = bedrockBase; y <= h; ++y) {
                 let isLow = h < waterLine + 3;
+
+                // desert/snow low region sand/snow
                 if (isLow && y >= h - SAND_THICK + 1 && biome === "desert") { blocks[x][y][z] = BLOCK.sand; continue; }
                 if (isLow && y >= h - SAND_THICK + 1 && biome === "snow") { blocks[x][y][z] = BLOCK.snow; continue; }
 
+                // deep layers / deepslate
                 if (y < bedrockBase + deepslateH || (y < h - 6 && h > waterLine + 10 && Math.random() < 0.25)) {
                     let ore = randomOre(x, y, z, 'deep_stone');
                     blocks[x][y][z] = ore ? ore : BLOCK.deep_stone;
@@ -318,32 +319,51 @@ function createWorld() {
                 if (y >= h - SAND_THICK + 1 && isLow && biome === "desert") { blocks[x][y][z] = BLOCK.sand; continue; }
                 if (y >= h - SAND_THICK + 1 && isLow && biome === "snow") { blocks[x][y][z] = BLOCK.snow; continue; }
 
+                // middle stone zone
                 if (y < h - 7) {
                     let ore = randomOre(x, y, z, 'stone');
                     blocks[x][y][z] = ore ? ore : BLOCK.stone;
                     continue;
                 }
 
+                // near-surface layers
                 if (y < h) {
-                    blocks[x][y][z] = (biome === "desert") ? BLOCK.sand : BLOCK.soil;
+                    // for mountain: mix soil and stone with higher chance of stone near top
+                    if (biome === "mountain") {
+                        // probability of stone increases closer to top
+                        let stoneProb = 0.25 + 0.2 * ((y - (h - 7)) / 7); // 0.25..0.45 roughly
+                        if (Math.random() < stoneProb) blocks[x][y][z] = BLOCK.stone;
+                        else blocks[x][y][z] = BLOCK.soil;
+                    } else {
+                        blocks[x][y][z] = (biome === "desert") ? BLOCK.sand : BLOCK.soil;
+                    }
                     continue;
                 }
 
+                // top block y == h
                 if (y == h) {
-                    if (biome === "desert") blocks[x][y][z] = BLOCK.sand;
-                    else if (biome === "snow") blocks[x][y][z] = BLOCK.snow;
-                    else blocks[x][y][z] = BLOCK.grass;
+                    if (biome === "desert") {
+                        blocks[x][y][z] = BLOCK.sand;
+                    } else if (biome === "snow") {
+                        blocks[x][y][z] = BLOCK.snow;
+                    } else if (biome === "mountain") {
+                        // mountain tops accumulate snow
+                        blocks[x][y][z] = BLOCK.snow;
+                    } else {
+                        blocks[x][y][z] = BLOCK.grass;
+                    }
                     continue;
                 }
             }
 
+            // water
             if (h < waterLine - 1) {
                 for (let y = h + 1; y < waterLine; ++y) blocks[x][y][z] = BLOCK.water;
             }
         }
     }
 
-    // Plants and trees
+    // Plants and trees (调整仙人掌密度)
     for (let i = 0; i < 400; ++i) {
         let x = Math.floor(Math.random() * (WORLD_W - 7) + 3),
             z = Math.floor(Math.random() * (WORLD_D - 7) + 3);
@@ -357,8 +377,9 @@ function createWorld() {
         if (y < 4) continue;
 
         if (biome === "desert") {
-            if (Math.random() < 0.18) {
-                let cactusHeight = 1 + Math.floor(Math.random() * 3);
+            // cactus probability increased to be denser
+            if (Math.random() < 0.38) { // was 0.18 -> now 0.38
+                let cactusHeight = 1 + Math.floor(Math.random() * 4); // allow up to 4 tall
                 for (let h2 = 1; h2 <= cactusHeight; ++h2) {
                     if (y + h2 >= WORLD_H) break;
                     if (blocks[x][y+h2][z] !== null) break;
@@ -368,6 +389,7 @@ function createWorld() {
             continue;
         }
 
+        // forest & snow: trees
         let snowTree = (biome === "snow");
         let woodType = snowTree ? BLOCK.fir_wood : BLOCK.banyan_wood;
         let height = snowTree ? 2 + Math.floor(valueNoise.noise(x*0.23, z*0.28) * 2.0)
@@ -425,10 +447,10 @@ window.gameState = gameState;
 // =========== Rendering / Three.js scene & performance caches ===========
 let camera, scene, renderer, blockMeshes;
 const SHARED_GEOMETRY = new THREE.BoxGeometry(1, 1, 1);
-const MATERIAL_CACHE = new Map(); // block id -> materials array
+const MATERIAL_CACHE = new Map();
 let lastCameraCell = { x: -9999, y: -9999, z: -9999 };
 
-// setupThree with pixel ratio limit
+// setupThree
 function setupThree() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x81D4FA);
@@ -443,7 +465,7 @@ function setupThree() {
     blockMeshes = new Map();
 }
 
-// optimized addBlockMesh using shared geometry & cached materials
+// optimized addBlockMesh
 function addBlockMesh(x, y, z, id) {
     const key = `${x}_${y}_${z}`;
     if (blockMeshes.has(key)) return;
@@ -474,14 +496,13 @@ function addBlockMesh(x, y, z, id) {
     blockMeshes.set(key, mesh);
 }
 
-// optimized renderVisibleBlocks: only update cells within RENDER_DIST and remove meshes outside
+// renderVisibleBlocks
 function renderVisibleBlocks() {
     const camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
     const minX = Math.max(0, camX - RENDER_DIST), maxX = Math.min(WORLD_W - 1, camX + RENDER_DIST);
     const minY = Math.max(0, camY - RENDER_DIST), maxY = Math.min(WORLD_H - 1, camY + RENDER_DIST);
     const minZ = Math.max(0, camZ - RENDER_DIST), maxZ = Math.min(WORLD_D - 1, camZ + RENDER_DIST);
 
-    // add missing meshes in frustum box
     for (let x = minX; x <= maxX; x++) {
         for (let y = minY; y <= maxY; y++) {
             for (let z = minZ; z <= maxZ; z++) {
@@ -503,7 +524,6 @@ function renderVisibleBlocks() {
         }
     }
 
-    // remove meshes outside frustum box
     for (const key of Array.from(blockMeshes.keys())) {
         const [sx, sy, sz] = key.split('_').map(Number);
         if (sx < minX || sx > maxX || sy < minY || sy > maxY || sz < minZ || sz > maxZ) {
@@ -532,10 +552,9 @@ window.addEventListener('resize', () => {
     camera.updateProjectionMatrix();
 });
 
-// ===== Collision: AABB-based accurate check =====
+// ===== Collision & movement (AABB, step-up) =====
 function collidesAt(px, py, pz) {
-    // player's collision box
-    const r = 0.29; // horizontal radius
+    const r = 0.29;
     const minX = Math.floor(px - r);
     const maxX = Math.floor(px + r);
     const minY = Math.floor(py - 0.8);
@@ -559,12 +578,10 @@ function collidesAt(px, py, pz) {
     return false;
 }
 
-// compatible canStand wrapper
 function canStand(nx, ny, nz) {
     return !collidesAt(nx, ny, nz);
 }
 
-// ===== Camera & Player movement with axis separation & step-up handling =====
 function updateCamera() {
     camera.position.set(gameState.px, gameState.py, gameState.pz);
     let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
@@ -580,31 +597,23 @@ function stepPlayer() {
     if (gameState.move.s) { dx -= Math.sin(ang) * speed; dz -= Math.cos(ang) * speed; }
     if (gameState.move.a) { dx -= Math.sin(ang - Math.PI/2) * speed; dz += Math.cos(ang - Math.PI/2) * speed; }
     if (gameState.move.d) { dx -= Math.sin(ang + Math.PI/2) * speed; dz += Math.cos(ang + Math.PI/2) * speed; }
+    // 别改上面移动
 
     let px = gameState.px, py = gameState.py, pz = gameState.pz;
-    // vertical velocity
-    if (!gameState.fly) {
-        gameState.vy -= 0.011;
-    }
+    if (!gameState.fly) gameState.vy -= 0.011;
     let dy = gameState.fly ? ((gameState.move.up ? speed : 0) - (gameState.move.down ? speed : 0)) : gameState.vy;
 
-    // 1) vertical move
     let newY = py + dy;
     if (!collidesAt(px, newY, pz)) {
         py = newY;
     } else {
         if (!gameState.fly) gameState.vy = 0;
-        // try small upward adjustments to avoid sinking into blocks
         let stepped = false;
         for (let t = 0.05; t <= 0.5; t += 0.05) {
             if (!collidesAt(px, py + t, pz)) { py = py + t; stepped = true; break; }
         }
-        if (!stepped) {
-            // keep py as is
-        }
     }
 
-    // helper for step-up attempts
     const tryStepMove = (targetX, targetY, targetZ, maxStep = 0.5) => {
         if (!collidesAt(targetX, targetY, targetZ)) return { success: true, nx: targetX, ny: targetY, nz: targetZ };
         for (let step = 0.05; step <= maxStep; step += 0.05) {
@@ -615,7 +624,6 @@ function stepPlayer() {
         return { success: false };
     };
 
-    // 2) horizontal movement: separate axes
     if (dx !== 0) {
         let res = tryStepMove(px + dx, py, pz);
         if (res.success) { px = res.nx; py = res.ny; pz = res.nz; }
@@ -624,36 +632,30 @@ function stepPlayer() {
         let res = tryStepMove(px, py, pz + dz);
         if (res.success) { px = res.nx; py = res.ny; pz = res.nz; }
         else {
-            // try diagonal
             let res2 = tryStepMove(px + dx, py, pz + dz);
             if (res2.success) { px = res2.nx; py = res2.ny; pz = res2.nz; }
         }
     }
 
-    // clamp to world bounds
     px = Math.max(1, Math.min(WORLD_W - 2, px));
     py = Math.max(2, Math.min(WORLD_H - 2, py));
     pz = Math.max(1, Math.min(WORLD_D - 2, pz));
-
     Object.assign(gameState, { px, py, pz });
 }
 
-// animate with renderVisibleBlocks throttled to camera cell changes
 function animate() {
     requestAnimationFrame(animate);
     stepPlayer();
-
     const camCellX = Math.floor(gameState.px), camCellY = Math.floor(gameState.py), camCellZ = Math.floor(gameState.pz);
     if (camCellX !== lastCameraCell.x || camCellY !== lastCameraCell.y || camCellZ !== lastCameraCell.z) {
         lastCameraCell.x = camCellX; lastCameraCell.y = camCellY; lastCameraCell.z = camCellZ;
         renderVisibleBlocks();
     }
-
     updateCamera();
     renderer && renderer.render(scene, camera);
 }
 
-// ===== Raycast and input handling (liquids ignored) =====
+// ===== Raycast & Input (liquids ignored) =====
 function raycastBlock(maxDist = 6) {
     let ox = gameState.px, oy = gameState.py + 0.6, oz = gameState.pz;
     let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
@@ -666,12 +668,9 @@ function raycastBlock(maxDist = 6) {
         if (xi < 0 || xi >= WORLD_W || yi < 0 || yi >= WORLD_H || zi < 0 || zi >= WORLD_D) continue;
         let t = gameState.blocks[xi][yi][zi];
         if (t !== null) {
-            if (t === BLOCK.water || t === BLOCK.lava) {
-                continue; // liquids are ignored by raycast
-            } else {
-                let bx = x - lx * 0.08, by = y - ly * 0.08, bz = z - lz * 0.08;
-                return { x: xi, y: yi, z: zi, px: Math.floor(bx), py: Math.floor(by), pz: Math.floor(bz) };
-            }
+            if (t === BLOCK.water || t === BLOCK.lava) continue;
+            let bx = x - lx * 0.08, by = y - ly * 0.08, bz = z - lz * 0.08;
+            return { x: xi, y: yi, z: zi, px: Math.floor(bx), py: Math.floor(by), pz: Math.floor(bz) };
         }
     }
     return null;
