@@ -1,7 +1,4 @@
-// world_complete.js
-// 完整脚本：噪声、地形、群系（forest/desert/snow/mountain）、矿脉、岩浆、渲染优化、碰撞、输入、UI
-// 直接保存替换你的主脚本（例如 world.js / world_fixed_full.js）。
-
+// noise.js
 // --- ValueNoise + Worley分型地形 FBM/Worley Cellular Noise ----
 class ValueNoise {
     constructor(seed = 1) { this.seed = seed; }
