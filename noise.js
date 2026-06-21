@@ -283,7 +283,7 @@ function createWorld() {
             // combine with reduced amplitude factor to make overall smoother
             let base = (0.44*mtn + 0.2*hills + 0.09*dunes + 0.12*river + 0.15*island);
             // previous multiplier was large; reduce amplitude by using smaller factor
-            let h0 = Math.floor(WORLD_H*0.28 + base * WORLD_H * 0.40);
+            let h0 = Math.floor(WORLD_H*0.28 + base * WORLD_H * 0.20);  //  起伏
             let h = clamp(h0, 5, WORLD_H - 2);
 
             let biome = getBiome(x, z);
