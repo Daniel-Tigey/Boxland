@@ -180,26 +180,26 @@ const BLOCK_TEXTURE_FILES = [
 ];
 
 const BLOCK_TEXTURE_MAP = {
-    [BLOCK.grass]:   { top: "grass_soil_top.png", side: "grass_soil.png", bottom: "grass_soil_bottom.png" },
-    [BLOCK.soil]:    { side: "soil.png" },
+    [BLOCK.grass]:   { top: "grass_block_top.png", side: "grass_block_side.png", bottom: "dirt.png" },
+    [BLOCK.soil]:    { side: "dirt.png" },
     [BLOCK.stone]:   { side: "stone.png" },
-    [BLOCK.banyan_wood]: { top: "banyan_wood_top.png", side: "banyan_wood.png", bottom: "banyan_wood_bottom.png" },
-    [BLOCK.leaf_00]: { side: "leaf_00.png", transparent: true, alphaTest: 0.5 },
-    [BLOCK.leaf_07]: { side: "leaf_07.png", transparent: true, alphaTest: 0.5 },
+    [BLOCK.banyan_wood]: { top: "oak_log_top.png", side: "oak_log.png", bottom: "oak_log_top.png" },
+    [BLOCK.leaf_00]: { side: "oak_leaves.png", transparent: true, alphaTest: 0.5 },
+    [BLOCK.leaf_07]: { side: "birch_leaves.png", transparent: true, alphaTest: 0.5 },
     [BLOCK.water]:   { side: "water.png", transparent: true, opacity: 0.75 },
     [BLOCK.bedrock]: { side: "bedrock.png" },
     [BLOCK.sand]:    { side: "sand.png" },
-    [BLOCK.deep_stone]: { side: "deep_stone.png" },
+    [BLOCK.deep_stone]: { side: "deepslate.png" },
     [BLOCK.lava]:    { side: "lava.png", transparent: false },
-    [BLOCK.coal_mine]: { side: "coal_mine.png" },
-    [BLOCK.copper_mine]: { side: "copper_mine.png" },
-    [BLOCK.silver_mine]: { side: "silver_mine.png" },
-    [BLOCK.platinum_mine]: { side: "platinum_mine.png" },
-    [BLOCK.diamond_mine]: { side: "diamond_mine.png" },
+    [BLOCK.coal_mine]: { side: "coal_ore.png" },
+    [BLOCK.copper_mine]: { side: "copper_ore.png" },
+    [BLOCK.silver_mine]: { side: "iron_ore.png" },
+    [BLOCK.platinum_mine]: { side: "gold_ore.png" },
+    [BLOCK.diamond_mine]: { side: "diamond_ore.png" },
     [BLOCK.ice]:     { side: "ice.png" },
     [BLOCK.snow]:    { side: "snow.png" },
     [BLOCK.cactus]:  { side: "cactus.png" },
-    [BLOCK.fir_wood]:{ top: "fir_wood_top.png", side: "fir_wood.png", bottom: "fir_wood_bottom.png" }
+    [BLOCK.fir_wood]:{ top: "birch_log_top.png", side: "birch_log.png", bottom: "birch_log_top.png" }
 };
 
 // 预加载贴图（按文件名 key 存入 BLOCK_TEXTURES）
