@@ -144,7 +144,8 @@ const BLOCK_TEXTURE_FILES = [
     "deep_stone.png",
     "lava.png",
     "coal_mine.png","copper_mine.png","silver_mine.png","platinum_mine.png","diamond_mine.png",
-    "ice.png","snow.png","cactus.png",
+    "ice.png","snow.png",
+    "cactus.png", "cactus_top.png",
     "fir_wood_top.png","fir_wood.png","fir_wood_bottom.png"
 ];
 
@@ -155,7 +156,7 @@ const BLOCK_TEXTURE_MAP = {
     [BLOCK.banyan_wood]: { top: "banyan_wood_top.png", side: "banyan_wood.png", bottom: "banyan_wood_bottom.png" },
     [BLOCK.leaf_00]: { side: "leaf_00.png", transparent: true, alphaTest: 0.5 },
     [BLOCK.leaf_07]: { side: "leaf_07.png", transparent: true, alphaTest: 0.5 },
-    [BLOCK.water]:   { side: "water.png", transparent: true, opacity: 0.75 },
+    [BLOCK.water]:   { side: "water.png", transparent: true, opacity: 0.75, alphaTest: 0.75 },
     [BLOCK.bedrock]: { side: "bedrock.png" },
     [BLOCK.sand]:    { side: "sand.png" },
     [BLOCK.deep_stone]: { side: "deep_stone.png" },
@@ -167,7 +168,7 @@ const BLOCK_TEXTURE_MAP = {
     [BLOCK.diamond_mine]: { side: "diamond_mine.png" },
     [BLOCK.ice]:     { side: "ice.png" },
     [BLOCK.snow]:    { side: "snow.png" },
-    [BLOCK.cactus]:  { side: "cactus.png" },
+    [BLOCK.cactus]:  { top: "cactus_top.png", side: "cactus.png" },
     [BLOCK.fir_wood]:{ top: "fir_wood_top.png", side: "fir_wood.png", bottom: "fir_wood_bottom.png" }
 };
 
