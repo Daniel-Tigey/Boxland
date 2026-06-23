@@ -271,28 +271,29 @@ function createWorld() {
     const deepslateH = 8;
     const bedrockBase = 2;
 
+    // mountain amplitude multiplier (tuneable). 2.0 means mountain areas use double amplitude.
+    const MOUNTAIN_MULTIPLIER = 2.0;
+    const BASE_AMPLITUDE_FACTOR = 0.30;
+
     for (let x = 0; x < WORLD_W; x++) {
         for (let z = 0; z < WORLD_D; z++) {
-            // noises
             let mtn = perlin.fbm(x/60, z/60, {octaves:6, gain:0.48, lacunarity:1.67});
             let hills = perlin.fbm(x/19, z/19, {octaves:3, gain:0.43, lacunarity:2.12});
             let dunes = valueNoise.fbm(x/7, z/7, {octaves:2, gain:0.4, lacunarity:2.9});
             let river = 1 - valueNoise.worley(x/23, z/23, 6);
             let island = Math.max(0, valueNoise.fbm(x/100, z/100, {octaves:2, gain:0.8, lacunarity:2.2}));
 
-            // combine with reduced amplitude to make smoother terrain
             let base = (0.44*mtn + 0.2*hills + 0.09*dunes + 0.12*river + 0.15*island);
-            let h0 = Math.floor(WORLD_H*0.28 + base * WORLD_H * 0.30);
-            let h = clamp(h0, 5, WORLD_H - 2);
 
             let biome = getBiome(x, z);
 
-            // mountain override: ensure mountain stands out at least +10
+            let amplitudeFactor = BASE_AMPLITUDE_FACTOR;
             if (biome === "mountain") {
-                let mountainNoise = perlin.fbm(x/24, z/24, {octaves:5, gain:0.5, lacunarity:2.0});
-                let mh = 50 + Math.floor(mountainNoise * 30); // 50..80
-                h = Math.max(h + 10, clamp(mh, 50, 80));
+                amplitudeFactor = BASE_AMPLITUDE_FACTOR * MOUNTAIN_MULTIPLIER;
             }
+
+            let h0 = Math.floor(WORLD_H * 0.28 + base * WORLD_H * amplitudeFactor);
+            let h = clamp(h0, 5, WORLD_H - 2);
 
             // base filling (bedrock)
             for (let y = 0; y < bedrockBase; ++y) {
@@ -300,11 +301,10 @@ function createWorld() {
             }
 
             // define underground band for stratification:
-            // undergroundStart .. undergroundEnd inclusive
-            const undergroundStart = bedrockBase + deepslateH; // start index for stratified band
-            const undergroundEnd = Math.max(bedrockBase + 1, h - 7); // top of band (just below surface band)
+            const undergroundStart = bedrockBase + deepslateH; // inclusive
+            const undergroundEnd = Math.max(bedrockBase + 1, h - 7); // inclusive
             const undergroundHeight = Math.max(1, undergroundEnd - undergroundStart + 1);
-            const STONE_TOP_RATIO = 0.30; // top 30% -> stone; bottom 70% -> deep_stone
+            const STONE_TOP_RATIO = 0.30; // fallback when band too small
 
             for (let y = bedrockBase; y <= h; ++y) {
                 let isLow = h < waterLine + 3;
@@ -313,37 +313,53 @@ function createWorld() {
                 if (isLow && y >= h - SAND_THICK + 1 && biome === "desert") { blocks[x][y][z] = BLOCK.sand; continue; }
                 if (isLow && y >= h - SAND_THICK + 1 && biome === "snow") { blocks[x][y][z] = BLOCK.snow; continue; }
 
-                // deep layers / deepslate
+                // deep layers / deepslate / ore / lava
                 if (y < bedrockBase + deepslateH || (y < h - 6 && h > waterLine + 10 && Math.random() < 0.25)) {
-                    // try ore first
+                    // prioritize ore
                     let ore = randomOre(x, y, z, 'deep_stone');
-                    if (ore) {
-                        blocks[x][y][z] = ore;
-                        continue;
-                    }
-                    // stratification: if within band, compute fraction position
+                    if (ore) { blocks[x][y][z] = ore; continue; }
+
+                    // deterministic stratification: if inside the band, split into 10 slices
                     if (y >= undergroundStart && y <= undergroundEnd) {
-                        const posInBand = y - undergroundStart; // 0 .. undergroundHeight-1
-                        const frac = (undergroundHeight > 1) ? (posInBand / (undergroundHeight - 1)) : 0;
-                        if (frac < STONE_TOP_RATIO) {
-                            // top fraction => stone
-                            blocks[x][y][z] = BLOCK.stone;
-                        } else {
-                            // bottom fraction => deep_stone, with chance for lava in very deep areas
-                            if (y <= 12) {
-                                let lavaCluster = 1 - valueNoise.worley(x/10, z/10, 6);
-                                if (Math.random() < 0.015 * (0.6 + 1.4 * lavaCluster)) {
-                                    blocks[x][y][z] = BLOCK.lava;
-                                    continue;
+                        if (undergroundHeight >= 10) {
+                            // compute slice index 0..9
+                            const posInBand = y - undergroundStart; // 0..undergroundHeight-1
+                            const sliceIndex = Math.floor(posInBand * 10 / undergroundHeight); // 0..9
+                            if (sliceIndex < 3) {
+                                // top 3 slices => stone
+                                blocks[x][y][z] = BLOCK.stone;
+                            } else {
+                                // bottom 7 slices => deep_stone (allow lava in very deep)
+                                if (y <= 12) {
+                                    let lavaCluster = 1 - valueNoise.worley(x/10, z/10, 6);
+                                    if (Math.random() < 0.015 * (0.6 + 1.4 * lavaCluster)) {
+                                        blocks[x][y][z] = BLOCK.lava;
+                                        continue;
+                                    }
                                 }
+                                blocks[x][y][z] = BLOCK.deep_stone;
                             }
-                            blocks[x][y][z] = BLOCK.deep_stone;
+                        } else {
+                            // band too small: fallback to deterministic top N layers stone (round up)
+                            const topCount = Math.max(1, Math.round(undergroundHeight * STONE_TOP_RATIO)); // at least 1
+                            const posInBand = y - undergroundStart;
+                            if (posInBand < topCount) {
+                                blocks[x][y][z] = BLOCK.stone;
+                            } else {
+                                if (y <= 12) {
+                                    let lavaCluster = 1 - valueNoise.worley(x/10, z/10, 6);
+                                    if (Math.random() < 0.015 * (0.6 + 1.4 * lavaCluster)) {
+                                        blocks[x][y][z] = BLOCK.lava;
+                                        continue;
+                                    }
+                                }
+                                blocks[x][y][z] = BLOCK.deep_stone;
+                            }
                         }
                         continue;
                     } else {
-                        // outside stratified band
+                        // outside stratified band: keep earlier heuristic
                         if (y <= bedrockBase + deepslateH - 1) {
-                            // near bedrock: favor deep_stone with chance of lava
                             if (Math.random() < 0.70) {
                                 if (y <= 12) {
                                     let lavaCluster = 1 - valueNoise.worley(x/10, z/10, 6);
@@ -357,33 +373,28 @@ function createWorld() {
                                 blocks[x][y][z] = BLOCK.stone;
                             }
                         } else {
-                            // fallback default
                             blocks[x][y][z] = BLOCK.deep_stone;
                         }
                         continue;
                     }
                 }
 
-                // near-surface sand/snow (handled)
+                // near-surface sand/snow
                 if (y >= h - SAND_THICK + 1 && isLow && biome === "desert") { blocks[x][y][z] = BLOCK.sand; continue; }
                 if (y >= h - SAND_THICK + 1 && isLow && biome === "snow") { blocks[x][y][z] = BLOCK.snow; continue; }
 
-                // upper underground: ore sampling then mostly stone (bias toward stone)
+                // upper underground: ore then mostly stone
                 if (y < h - 7) {
                     let ore = randomOre(x, y, z, 'stone');
-                    if (ore) {
-                        blocks[x][y][z] = ore;
-                    } else {
-                        // bias: 85% stone, 15% deep_stone in upper underground
-                        blocks[x][y][z] = (Math.random() < 0.85) ? BLOCK.stone : BLOCK.deep_stone;
-                    }
+                    if (ore) { blocks[x][y][z] = ore; }
+                    else { blocks[x][y][z] = (Math.random() < 0.85) ? BLOCK.stone : BLOCK.deep_stone; }
                     continue;
                 }
 
-                // near-surface: soil or mountain specific mixing
+                // near-surface: soil / mountain mixing
                 if (y < h) {
                     if (biome === "mountain") {
-                        let stoneProb = 0.35 + 0.4 * ((y - (h - 7)) / 7); // stronger stone near top
+                        let stoneProb = 0.35 + 0.4 * ((y - (h - 7)) / 7);
                         if (Math.random() < stoneProb) blocks[x][y][z] = BLOCK.stone;
                         else blocks[x][y][z] = BLOCK.soil;
                     } else {
