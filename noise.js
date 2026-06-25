@@ -272,12 +272,21 @@ function createWorld() {
     const deepslateH = 8;
     const bedrockBase = 2;
 
-    // mountain amplitude multiplier (tuneable). 2.0 means mountain areas use double amplitude.
-    const MOUNTAIN_MULTIPLIER = 2.0;
+    // mountain tuning
+    const MOUNTAIN_MULTIPLIER = 2.0; // amplitude multiplier at full mountainStrength
+    const MOUNTAIN_BIAS = 6;        // extra vertical bias at full mountainStrength
     const BASE_AMPLITUDE_FACTOR = 0.30;
+
+    function smoothstep(a, b, t) {
+        if (b <= a) return t >= b ? 1 : 0;
+        t = (t - a) / (b - a);
+        t = Math.max(0, Math.min(1, t));
+        return t * t * (3 - 2 * t);
+    }
 
     for (let x = 0; x < WORLD_W; x++) {
         for (let z = 0; z < WORLD_D; z++) {
+            // noises
             let mtn = perlin.fbm(x/60, z/60, {octaves:6, gain:0.48, lacunarity:1.67});
             let hills = perlin.fbm(x/19, z/19, {octaves:3, gain:0.43, lacunarity:2.12});
             let dunes = valueNoise.fbm(x/7, z/7, {octaves:2, gain:0.4, lacunarity:2.9});
@@ -286,14 +295,21 @@ function createWorld() {
 
             let base = (0.44*mtn + 0.2*hills + 0.09*dunes + 0.12*river + 0.15*island);
 
+            // get biome and a low-frequency mountain mask
             let biome = getBiome(x, z);
+            // use a separate low-freq noise for a smooth mountain mask
+            let mountainRaw = perlin.fbm(x/160, z/160, {octaves:3, gain:0.6, lacunarity:2.0});
+            // smoothstep to obtain strength in [0,1] (tweak thresholds if you like)
+            let mountainStrength = smoothstep(0.60, 0.88, mountainRaw);
+            // ensure mountainStrength = 0 in non-mountain biome areas if desired:
+            // but we keep it as-is so edges blend naturally; getBiome still labels mountain areas
+            // amplitude factor blends smoothly between base and amplified
+            let amplitudeFactor = BASE_AMPLITUDE_FACTOR * (1 + mountainStrength * (MOUNTAIN_MULTIPLIER - 1));
+            // vertical bias scaled by mountainStrength
+            let verticalBias = Math.round(MOUNTAIN_BIAS * mountainStrength);
 
-            let amplitudeFactor = BASE_AMPLITUDE_FACTOR;
-            if (biome === "mountain") {
-                amplitudeFactor = BASE_AMPLITUDE_FACTOR * MOUNTAIN_MULTIPLIER;
-            }
-
-            let h0 = Math.floor(WORLD_H * 0.28 + base * WORLD_H * amplitudeFactor);
+            // compute height: base undulation scaled, plus optional vertical bias
+            let h0 = Math.floor(WORLD_H * 0.28 + base * WORLD_H * amplitudeFactor + verticalBias);
             let h = clamp(h0, 5, WORLD_H - 2);
 
             // base filling (bedrock)
@@ -301,7 +317,7 @@ function createWorld() {
                 blocks[x][y][z] = (Math.random() < 0.66 || y === 0) ? BLOCK.bedrock : BLOCK.deep_stone;
             }
 
-            // define underground band for stratification:
+            // underground stratification band
             const undergroundStart = bedrockBase + deepslateH; // inclusive
             const undergroundEnd = Math.max(bedrockBase + 1, h - 7); // inclusive
             const undergroundHeight = Math.max(1, undergroundEnd - undergroundStart + 1);
@@ -320,17 +336,14 @@ function createWorld() {
                     let ore = randomOre(x, y, z, 'deep_stone');
                     if (ore) { blocks[x][y][z] = ore; continue; }
 
-                    // deterministic stratification: if inside the band, split into 10 slices
+                    // deterministic stratification: split into 10 slices if tall enough
                     if (y >= undergroundStart && y <= undergroundEnd) {
                         if (undergroundHeight >= 10) {
-                            // compute slice index 0..9
                             const posInBand = y - undergroundStart; // 0..undergroundHeight-1
                             const sliceIndex = Math.floor(posInBand * 10 / undergroundHeight); // 0..9
                             if (sliceIndex < 3) {
-                                // top 3 slices => stone
                                 blocks[x][y][z] = BLOCK.stone;
                             } else {
-                                // bottom 7 slices => deep_stone (allow lava in very deep)
                                 if (y <= 12) {
                                     let lavaCluster = 1 - valueNoise.worley(x/10, z/10, 6);
                                     if (Math.random() < 0.015 * (0.6 + 1.4 * lavaCluster)) {
@@ -341,8 +354,8 @@ function createWorld() {
                                 blocks[x][y][z] = BLOCK.deep_stone;
                             }
                         } else {
-                            // band too small: fallback to deterministic top N layers stone (round up)
-                            const topCount = Math.max(1, Math.round(undergroundHeight * STONE_TOP_RATIO)); // at least 1
+                            // small band fallback: top N layers stone
+                            const topCount = Math.max(1, Math.round(undergroundHeight * STONE_TOP_RATIO));
                             const posInBand = y - undergroundStart;
                             if (posInBand < topCount) {
                                 blocks[x][y][z] = BLOCK.stone;
@@ -359,7 +372,7 @@ function createWorld() {
                         }
                         continue;
                     } else {
-                        // outside stratified band: keep earlier heuristic
+                        // outside stratified band: previous heuristic
                         if (y <= bedrockBase + deepslateH - 1) {
                             if (Math.random() < 0.70) {
                                 if (y <= 12) {
@@ -392,15 +405,16 @@ function createWorld() {
                     continue;
                 }
 
-                // near-surface: soil / mountain mixing
+                // near-surface: soil or mountain-blended mixing
                 if (y < h) {
-                    if (biome === "mountain") {
-                        let stoneProb = 0.35 + 0.4 * ((y - (h - 7)) / 7);
-                        if (Math.random() < stoneProb) blocks[x][y][z] = BLOCK.stone;
-                        else blocks[x][y][z] = BLOCK.soil;
-                    } else {
-                        blocks[x][y][z] = (biome === "desert") ? BLOCK.sand : BLOCK.soil;
-                    }
+                    // compute a stone probability that increases with mountainStrength and with proximity to top
+                    const localTopFrac = ((y - (h - 7)) / 7); // -inf..1 ; but we only use when y in this band
+                    const topFracClamped = Math.max(0, Math.min(1, localTopFrac));
+                    const baseStoneProb = 0.10 + 0.25 * topFracClamped; // base ~ 0.10..0.35
+                    const mountainStoneBoost = mountainStrength * 0.6; // up to +0.6
+                    const stoneProb = Math.max(0, Math.min(0.98, baseStoneProb + mountainStoneBoost));
+                    if (Math.random() < stoneProb) blocks[x][y][z] = BLOCK.stone;
+                    else blocks[x][y][z] = (biome === "desert") ? BLOCK.sand : BLOCK.soil;
                     continue;
                 }
 
@@ -408,7 +422,7 @@ function createWorld() {
                 if (y == h) {
                     if (biome === "desert") blocks[x][y][z] = BLOCK.sand;
                     else if (biome === "snow") blocks[x][y][z] = BLOCK.snow;
-                    else if (biome === "mountain") blocks[x][y][z] = BLOCK.snow;
+                    else if (mountainStrength > 0.15) blocks[x][y][z] = BLOCK.snow; // mountain tops get snow if strong enough
                     else blocks[x][y][z] = BLOCK.grass;
                     continue;
                 }
@@ -421,58 +435,97 @@ function createWorld() {
         }
     }
 
-    // Plants and trees (denser cactus in desert)
-    for (let i = 0; i < 400; ++i) {
-        let x = Math.floor(Math.random() * (WORLD_W - 7) + 3),
-            z = Math.floor(Math.random() * (WORLD_D - 7) + 3);
-        let biome = getBiome(x, z);
+    // -------------------------
+    // Lake generation (unchanged)
+    // -------------------------
+    const LAKE_ATTEMPTS = 600;
+    for (let attempt = 0; attempt < LAKE_ATTEMPTS; attempt++) {
+        const lx = Math.floor(Math.random() * (WORLD_W - 12)) + 6;
+        const lz = Math.floor(Math.random() * (WORLD_D - 12)) + 6;
+        const lb = getBiome(lx, lz);
+        let spawnProb = 0;
+        if (lb === 'forest') spawnProb = 0.30;
+        else if (lb === 'snow') spawnProb = 0.20;
+        else if (lb === 'desert') spawnProb = 0.10;
+        else spawnProb = 0.0;
+        if (Math.random() >= spawnProb) continue;
 
-        // find surface y
+        let surfaceY = -1;
+        for (let yy = WORLD_H - 5; yy > 2; --yy) {
+            if ([BLOCK.grass, BLOCK.soil, BLOCK.sand, BLOCK.snow].includes(blocks[lx][yy][lz]) && blocks[lx][yy+1][lz] == null) {
+                surfaceY = yy; break;
+            }
+        }
+        if (surfaceY < 4) continue;
+
+        const radius = 2 + Math.floor(Math.random() * 5);
+        const maxDepth = 1 + Math.floor(Math.random() * 4);
+
+        for (let tx = lx - radius; tx <= lx + radius; tx++) {
+            if (tx < 1 || tx >= WORLD_W - 1) continue;
+            for (let tz = lz - radius; tz <= lz + radius; tz++) {
+                if (tz < 1 || tz >= WORLD_D - 1) continue;
+                const dx = tx - lx, dz = tz - lz;
+                const d2 = dx*dx + dz*dz;
+                if (d2 > radius*radius) continue;
+                const dist = Math.sqrt(d2);
+                const factor = 1 - (dist / (radius + 0.0001));
+                const carveDepth = Math.max(1, Math.ceil(factor * maxDepth));
+                let bottomY = surfaceY - carveDepth;
+                if (bottomY <= bedrockBase) bottomY = bedrockBase + 1;
+                for (let cy = surfaceY; cy > bottomY; cy--) blocks[tx][cy][tz] = null;
+                blocks[tx][bottomY][tz] = BLOCK.sand;
+                for (let fy = bottomY + 1; fy <= surfaceY; fy++) {
+                    if (lb === 'snow') blocks[tx][fy][tz] = BLOCK.ice;
+                    else blocks[tx][fy][tz] = BLOCK.water;
+                }
+            }
+        }
+    }
+
+    // Plants and trees (unchanged)
+    for (let i = 0; i < 400; ++i) {
+        let tx = Math.floor(Math.random() * (WORLD_W - 7) + 3),
+            tz = Math.floor(Math.random() * (WORLD_D - 7) + 3);
+        let biome = getBiome(tx, tz);
         let y;
         for (y = WORLD_H - 5; y > 2; --y)
-            if ([BLOCK.grass, BLOCK.soil, BLOCK.sand, BLOCK.snow].includes(blocks[x][y][z]) && blocks[x][y+1][z] == null)
+            if ([BLOCK.grass, BLOCK.soil, BLOCK.sand, BLOCK.snow].includes(blocks[tx][y][tz]) && blocks[tx][y+1][tz] == null)
                 break;
         if (y < 4) continue;
-
         if (biome === "desert") {
             if (Math.random() < 0.38) {
                 let cactusHeight = 1 + Math.floor(Math.random() * 4);
                 for (let h2 = 1; h2 <= cactusHeight; ++h2) {
                     if (y + h2 >= WORLD_H) break;
-                    if (blocks[x][y+h2][z] !== null) break;
-                    blocks[x][y+h2][z] = BLOCK.cactus;
+                    if (blocks[tx][y+h2][tz] !== null) break;
+                    blocks[tx][y+h2][tz] = BLOCK.cactus;
                 }
             }
             continue;
         }
-
-        // forest & snow: trees
         let snowTree = (biome === "snow");
         let woodType = snowTree ? BLOCK.fir_wood : BLOCK.banyan_wood;
-        let height = snowTree ? 2 + Math.floor(valueNoise.noise(x*0.23, z*0.28) * 2.0)
-                              : 4 + Math.floor(valueNoise.noise(x*0.23, z*0.28) * 2.8);
+        let height = snowTree ? 2 + Math.floor(valueNoise.noise(tx*0.23, tz*0.28) * 2.0)
+                              : 4 + Math.floor(valueNoise.noise(tx*0.23, tz*0.28) * 2.8);
         if (height < 2) height = 2;
-
-        // check space
         let spaceOk = true;
         for (let h2 = 1; h2 <= height + 2; ++h2) {
             let ty = y + h2;
-            if (ty >= WORLD_H || blocks[x][ty][z] !== null) { spaceOk = false; break; }
+            if (ty >= WORLD_H || blocks[tx][ty][tz] !== null) { spaceOk = false; break; }
         }
         if (!spaceOk) continue;
-
-        for (let h2 = 1; h2 <= height; ++h2) blocks[x][y+h2][z] = woodType;
-
+        for (let h2 = 1; h2 <= height; ++h2) blocks[tx][y+h2][tz] = woodType;
         for (let lx = -2; lx <= 2; ++lx)
          for (let ly = Math.floor(height/2); ly <= height + 2; ++ly)
           for (let lz = -2; lz <= 2; ++lz) {
             if (Math.abs(lx) + Math.abs(lz) > 3 || (lx === 0 && ly === Math.floor(height/2) && lz === 0)) continue;
-            let tx = x + lx, ty = y + ly, tz = z + lz;
-            if (tx < 0 || ty >= WORLD_H || tz < 0 || tx >= WORLD_W || tz >= WORLD_D) continue;
+            let px = tx + lx, py = y + ly, pz = tz + lz;
+            if (px < 0 || py >= WORLD_H || pz < 0 || px >= WORLD_W || pz >= WORLD_D) continue;
             let dist = Math.abs(lx) + Math.abs(ly - height) + Math.abs(lz);
             let dropP = snowTree ? 0.25 + 0.07 * dist : 0.10 + 0.04 * dist;
             if (Math.random() < dropP) continue;
-            if (blocks[tx][ty][tz] == null) blocks[tx][ty][tz] = snowTree ? BLOCK.leaf_07 : BLOCK.leaf_00;
+            if (blocks[px][py][pz] == null) blocks[px][py][pz] = snowTree ? BLOCK.leaf_07 : BLOCK.leaf_00;
          }
     }
 
