@@ -136,7 +136,7 @@ const BLOCK_TEXTURE_FILES = [
     "grass_soil_top.png","grass_soil.png","grass_soil_bottom.png",
     "soil.png",
     "stone.png",
-    "banyan_wood_top.png","banyan_wood.png","banyan_wood_bottom.png",
+    "banyan_wood_top.png","banyan_wood.png","banyan_wood_top.png",
     "leaf_00.png","leaf_07.png",
     "water.png",
     "bedrock.png",
@@ -146,7 +146,7 @@ const BLOCK_TEXTURE_FILES = [
     "coal_mine.png","copper_mine.png","silver_mine.png","platinum_mine.png","diamond_mine.png",
     "ice.png","snow.png",
     "cactus.png", "cactus_top.png",
-    "fir_wood_top.png","fir_wood.png","fir_wood_bottom.png"
+    "fir_wood_top.png","fir_wood.png","fir_wood_top.png"
 ];
 
 const BLOCK_TEXTURE_MAP = {
