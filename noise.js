@@ -212,7 +212,7 @@ function makeMaterialFromTexOrColor(tex, color, opts = {}) {
 }
 
 // ===== World constants =====
-const WORLD_W = 512, WORLD_D = 512, WORLD_H = 100, SAND_THICK = 3;
+const WORLD_W = 1024, WORLD_D = 1024, WORLD_H = 128, SAND_THICK = 3; // 扩张大小
 let RENDER_DIST = 15; // 可调整渲染距离
 const perlin = new PerlinNoise(20230519);
 const valueNoise = new ValueNoise(54188114514);
@@ -260,7 +260,7 @@ function randomOre(x, y, z, type = 'deep_stone') {
     return null;
 }
 
-// =========== createWorld（完整实现，含分层 30% stone / 70% deep_stone） ===========
+// =========== createWorld ===========
 function createWorld() {
     const blocks = new Array(WORLD_W);
     for (let x = 0; x < WORLD_W; x++) {
@@ -274,7 +274,8 @@ function createWorld() {
 
     // mountain tuning
     const MOUNTAIN_MULTIPLIER = 2.0; // amplitude multiplier at full mountainStrength
-    const MOUNTAIN_BIAS = 6;        // extra vertical bias at full mountainStrength
+    const MOUNTAIN_BIAS = 6;        // existing bias
+    const MOUNTAIN_LIFT = 10;       // 提升，按strength平滑
     const BASE_AMPLITUDE_FACTOR = 0.30;
 
     function smoothstep(a, b, t) {
@@ -301,23 +302,29 @@ function createWorld() {
             let mountainRaw = perlin.fbm(x/160, z/160, {octaves:3, gain:0.6, lacunarity:2.0});
             // smoothstep to obtain strength in [0,1] (tweak thresholds if you like)
             let mountainStrength = smoothstep(0.60, 0.88, mountainRaw);
-            // ensure mountainStrength = 0 in non-mountain biome areas if desired:
-            // but we keep it as-is so edges blend naturally; getBiome still labels mountain areas
+
+            // compute "no-mountain" base height to determine mountain height portion
+            const baseHNoMountain = Math.floor(WORLD_H * 0.28 + base * WORLD_H * BASE_AMPLITUDE_FACTOR);
+
             // amplitude factor blends smoothly between base and amplified
             let amplitudeFactor = BASE_AMPLITUDE_FACTOR * (1 + mountainStrength * (MOUNTAIN_MULTIPLIER - 1));
-            // vertical bias scaled by mountainStrength
-            let verticalBias = Math.round(MOUNTAIN_BIAS * mountainStrength);
+            // vertical bias scaled by mountainStrength, include required extra +10 lift
+            let verticalBias = Math.round((MOUNTAIN_BIAS + MOUNTAIN_LIFT) * mountainStrength);
 
             // compute height: base undulation scaled, plus optional vertical bias
             let h0 = Math.floor(WORLD_H * 0.28 + base * WORLD_H * amplitudeFactor + verticalBias);
             let h = clamp(h0, 5, WORLD_H - 2);
+
+            // mountainHeight and snow threshold (upper half)
+            const mountainHeight = Math.max(0, h - baseHNoMountain);
+            const snowThresholdY = baseHNoMountain + Math.ceil(mountainHeight / 2); // 上半部分起点
 
             // base filling (bedrock)
             for (let y = 0; y < bedrockBase; ++y) {
                 blocks[x][y][z] = (Math.random() < 0.66 || y === 0) ? BLOCK.bedrock : BLOCK.deep_stone;
             }
 
-            // underground stratification band
+            // define underground band for stratification:
             const undergroundStart = bedrockBase + deepslateH; // inclusive
             const undergroundEnd = Math.max(bedrockBase + 1, h - 7); // inclusive
             const undergroundHeight = Math.max(1, undergroundEnd - undergroundStart + 1);
@@ -370,6 +377,7 @@ function createWorld() {
                                 blocks[x][y][z] = BLOCK.deep_stone;
                             }
                         }
+                        // no snowification here (deep layers)
                         continue;
                     } else {
                         // outside stratified band: previous heuristic
@@ -393,7 +401,7 @@ function createWorld() {
                     }
                 }
 
-                // near-surface sand/snow
+                // near-surface sand/snow (coastlines)
                 if (y >= h - SAND_THICK + 1 && isLow && biome === "desert") { blocks[x][y][z] = BLOCK.sand; continue; }
                 if (y >= h - SAND_THICK + 1 && isLow && biome === "snow") { blocks[x][y][z] = BLOCK.snow; continue; }
 
@@ -402,6 +410,7 @@ function createWorld() {
                     let ore = randomOre(x, y, z, 'stone');
                     if (ore) { blocks[x][y][z] = ore; }
                     else { blocks[x][y][z] = (Math.random() < 0.85) ? BLOCK.stone : BLOCK.deep_stone; }
+                    // possible snow only applies to near-surface/top, not here
                     continue;
                 }
 
@@ -413,17 +422,36 @@ function createWorld() {
                     const baseStoneProb = 0.10 + 0.25 * topFracClamped; // base ~ 0.10..0.35
                     const mountainStoneBoost = mountainStrength * 0.6; // up to +0.6
                     const stoneProb = Math.max(0, Math.min(0.98, baseStoneProb + mountainStoneBoost));
-                    if (Math.random() < stoneProb) blocks[x][y][z] = BLOCK.stone;
-                    else blocks[x][y][z] = (biome === "desert") ? BLOCK.sand : BLOCK.soil;
+                    if (Math.random() < stoneProb) {
+                        // assign stone, but if this layer is in mountain upper half and stone, may convert to snow
+                        let assigned = BLOCK.stone;
+                        if (mountainHeight > 0 && y >= snowThresholdY) {
+                            // 7/8 概率积雪，1/8 不积雪
+                            if (Math.random() < 0.875) assigned = BLOCK.snow;
+                        }
+                        blocks[x][y][z] = assigned;
+                    } else {
+                        blocks[x][y][z] = (biome === "desert") ? BLOCK.sand : BLOCK.soil;
+                    }
                     continue;
                 }
 
                 // top block
                 if (y == h) {
-                    if (biome === "desert") blocks[x][y][z] = BLOCK.sand;
-                    else if (biome === "snow") blocks[x][y][z] = BLOCK.snow;
-                    else if (mountainStrength > 0.15) blocks[x][y][z] = BLOCK.snow; // mountain tops get snow if strong enough
-                    else blocks[x][y][z] = BLOCK.grass;
+                    if (biome === "desert") {
+                        blocks[x][y][z] = BLOCK.sand;
+                    } else if (biome === "snow") {
+                        blocks[x][y][z] = BLOCK.snow;
+                    } else {
+                        // mountain tops: only if mountainHeight>0 and top is in upper half of mountain,
+                        // and with 7/8 chance become snow; otherwise grass
+                        if (mountainHeight > 0 && h >= snowThresholdY) {
+                            if (Math.random() < 0.875) blocks[x][y][z] = BLOCK.snow;
+                            else blocks[x][y][z] = BLOCK.grass;
+                        } else {
+                            blocks[x][y][z] = BLOCK.grass;
+                        }
+                    }
                     continue;
                 }
             }
@@ -435,9 +463,7 @@ function createWorld() {
         }
     }
 
-    // -------------------------
-    // Lake generation (unchanged)
-    // -------------------------
+    // 湖泊
     const LAKE_ATTEMPTS = 600;
     for (let attempt = 0; attempt < LAKE_ATTEMPTS; attempt++) {
         const lx = Math.floor(Math.random() * (WORLD_W - 12)) + 6;
@@ -475,15 +501,17 @@ function createWorld() {
                 if (bottomY <= bedrockBase) bottomY = bedrockBase + 1;
                 for (let cy = surfaceY; cy > bottomY; cy--) blocks[tx][cy][tz] = null;
                 blocks[tx][bottomY][tz] = BLOCK.sand;
+                let desertLakeType = Math.random();
                 for (let fy = bottomY + 1; fy <= surfaceY; fy++) {
                     if (lb === 'snow') blocks[tx][fy][tz] = BLOCK.ice;
+                    if (lb === 'desert' && (desertLakeType<=2.5)) blocks[tx][fy][tz] = BLOCK.lava; //在沙漠，有概率为岩浆湖
                     else blocks[tx][fy][tz] = BLOCK.water;
                 }
             }
         }
     }
 
-    // Plants and trees (unchanged)
+    // 树木 & 植物
     for (let i = 0; i < 400; ++i) {
         let tx = Math.floor(Math.random() * (WORLD_W - 7) + 3),
             tz = Math.floor(Math.random() * (WORLD_D - 7) + 3);
@@ -495,7 +523,12 @@ function createWorld() {
         if (y < 4) continue;
         if (biome === "desert") {
             if (Math.random() < 0.38) {
-                let cactusHeight = 1 + Math.floor(Math.random() * 4);
+                let cactusHeight = 2 + Math.floor(Math.random() * 4);
+                let i = Math.random();
+                while (i < (1/cactusHeight)) {
+                    // 高度叠加，越高，概率越小
+                    cactusHeight ++;
+                }
                 for (let h2 = 1; h2 <= cactusHeight; ++h2) {
                     if (y + h2 >= WORLD_H) break;
                     if (blocks[tx][y+h2][tz] !== null) break;
@@ -504,10 +537,10 @@ function createWorld() {
             }
             continue;
         }
-        let snowTree = (biome === "snow");
+        let snowTree = (biome === "snow" || biome === "mountain");
         let woodType = snowTree ? BLOCK.fir_wood : BLOCK.banyan_wood;
-        let height = snowTree ? 2 + Math.floor(valueNoise.noise(tx*0.23, tz*0.28) * 2.0)
-                              : 4 + Math.floor(valueNoise.noise(tx*0.23, tz*0.28) * 2.8);
+        let height = snowTree ? 8 + Math.floor(valueNoise.noise(tx*0.23, tz*0.28) * 2.0)
+                              : 4 + Math.floor(valueNoise.noise(tx*0.23, tz*0.28) * 2.8); //fir更高
         if (height < 2) height = 2;
         let spaceOk = true;
         for (let h2 = 1; h2 <= height + 2; ++h2) {
@@ -531,7 +564,6 @@ function createWorld() {
 
     return blocks;
 }
-
 // ============ 游戏状态 & 初始化 ============
 const HOTBAR_SIZE = 8;
 const DEFAULT_HOTBAR = [
