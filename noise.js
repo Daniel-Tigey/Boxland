@@ -115,7 +115,7 @@ const BLOCK = {
     grass: 0, soil: 1, stone: 2, banyan_wood: 3, leaf_00: 4, leaf_07: 5,
     water: 6, bedrock: 7, sand: 8, deep_stone: 9, lava: 10,
     coal_mine: 11, copper_mine: 12, silver_mine: 13, platinum_mine: 14, diamond_mine: 15,
-    ice: 16, snow: 17, cactus: 18, fir_wood: 19
+    ice: 16, snow: 17, cactus: 18, fir_wood: 19, quartz_block: 20
 };
 const COLORS = [
     0x4CAF50,0x8B5A2B,0x888888,0x8B4513,0x19cc19,0x17a44a,
@@ -127,7 +127,7 @@ const BLOCKNAMES = [
     "grass","soil","stone","banyan_wood","leaf_00","leaf_07",
     "water","bedrock","sand","deep_stone","lava",
     "coal_mine","copper_mine","silver_mine","platinum_mine","diamond_mine",
-    "ice","snow","cactus","fir_wood"
+    "ice","snow","cactus","fir_wood","quartz_block"
 ];
 
 // ==== 贴图文件名key ====
@@ -136,7 +136,7 @@ const BLOCK_TEXTURE_FILES = [
     "grass_soil_top.png","grass_soil.png","grass_soil_bottom.png",
     "soil.png",
     "stone.png",
-    "banyan_wood_top.png","banyan_wood.png","banyan_wood_top.png",
+    "banyan_wood_top.png","banyan_wood.png","banyan_wood_bottom.png",
     "leaf_00.png","leaf_07.png",
     "water.png",
     "bedrock.png",
@@ -146,7 +146,8 @@ const BLOCK_TEXTURE_FILES = [
     "coal_mine.png","copper_mine.png","silver_mine.png","platinum_mine.png","diamond_mine.png",
     "ice.png","snow.png",
     "cactus.png", "cactus_top.png",
-    "fir_wood_top.png","fir_wood.png","fir_wood_top.png"
+    "fir_wood_top.png","fir_wood.png","fir_wood_bottom.png",
+    "quartz_block.png"
 ];
 
 const BLOCK_TEXTURE_MAP = {
@@ -169,7 +170,8 @@ const BLOCK_TEXTURE_MAP = {
     [BLOCK.ice]:     { side: "ice.png" },
     [BLOCK.snow]:    { side: "snow.png" },
     [BLOCK.cactus]:  { top: "cactus_top.png", side: "cactus.png" },
-    [BLOCK.fir_wood]:{ top: "fir_wood_top.png", side: "fir_wood.png", bottom: "fir_wood_bottom.png" }
+    [BLOCK.fir_wood]:{ top: "fir_wood_top.png", side: "fir_wood.png", bottom: "fir_wood_bottom.png" },
+    [BLOCK.quartz_block.png]:{ side: "quartz_block.png" }
 };
 
 // 预加载贴图（按文件名 key 存入 BLOCK_TEXTURES）
@@ -217,13 +219,15 @@ let RENDER_DIST = 15; // 可调整渲染距离
 const perlin = new PerlinNoise(20230519);
 const valueNoise = new ValueNoise(54188114514);
 
-// Biome: forest / desert / snow / mountain
+// Biome: forest / desert / snow / mountain / pillar
 function getBiome(x, z) {
     let bio = perlin.noise(x/180, z/180);
     let mountainMask = perlin.noise(x/160, z/160); // lower frequency but denser
+    let pillarMask = perlin.noise(x/120, z/120); // pillar areas
     if (bio < 0.27) return "desert";
     if (bio > 0.75) return "snow";
     if (mountainMask > 0.68) return "mountain";
+    if (pillarMask > 0.86) return "pillar";
     return "forest";
 }
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
@@ -261,6 +265,7 @@ function randomOre(x, y, z, type = 'deep_stone') {
 }
 
 // =========== createWorld ===========
+// 完整实现，含：放大起伏的山、石柱群系、湖泊、每列 stone/deep_stone 抖动、仙人掌 & 秃树
 function createWorld() {
     const blocks = new Array(WORLD_W);
     for (let x = 0; x < WORLD_W; x++) {
@@ -278,7 +283,7 @@ function createWorld() {
     const MOUNTAIN_LIFT = 10;
     const BASE_AMPLITUDE_FACTOR = 0.30;
 
-    // New: stone/deep_stone cutoff Y (you can tune this)
+    // New: stone/deep_stone cutoff Y baseline
     const STONE_LEVEL_Y = Math.floor(WORLD_H * 0.35); // 基准分界线
 
     // Lake / cactus / tree tuning
@@ -305,7 +310,7 @@ function createWorld() {
 
             let base = (0.44*mtn + 0.2*hills + 0.09*dunes + 0.12*river + 0.15*island);
 
-            // biome + mountain strength
+            // get biome and a low-frequency mountain mask
             let biome = getBiome(x, z);
             let mountainRaw = perlin.fbm(x/160, z/160, {octaves:3, gain:0.6, lacunarity:2.0});
             let mountainStrength = smoothstep(0.60, 0.88, mountainRaw);
@@ -313,48 +318,52 @@ function createWorld() {
             // base no-mountain height (for mountainHeight calculation)
             const baseHNoMountain = Math.floor(WORLD_H * 0.28 + base * WORLD_H * BASE_AMPLITUDE_FACTOR);
 
-            // amplitude & bias
+            // amplitude factor blends smoothly between base and amplified
             let amplitudeFactor = BASE_AMPLITUDE_FACTOR * (1 + mountainStrength * (MOUNTAIN_MULTIPLIER - 1));
+            // vertical bias scaled by mountainStrength, include required extra lift
             let verticalBias = Math.round((MOUNTAIN_BIAS + MOUNTAIN_LIFT) * mountainStrength);
 
+            // compute height
             let h0 = Math.floor(WORLD_H * 0.28 + base * WORLD_H * amplitudeFactor + verticalBias);
             let h = clamp(h0, 5, WORLD_H - 2);
 
+            // mountainHeight and snow threshold (upper half)
             const mountainHeight = Math.max(0, h - baseHNoMountain);
             const snowThresholdY = baseHNoMountain + Math.ceil(mountainHeight / 2);
 
             // per-column jitter for stone/deep_stone cutoff: -2..+2 using low-frequency noise
-            // valueNoise.fbm in [~0..1], map to integer -2..2
             const jitterRaw = valueNoise.fbm(x * 0.08, z * 0.08, {octaves:2, gain:0.5, lacunarity:2});
             const jitter = Math.round((jitterRaw - 0.5) * 4); // roughly -2..+2
             const localStoneLevel = clamp(STONE_LEVEL_Y + jitter, bedrockBase + 1, WORLD_H - 5);
 
-            // bedrock
+            // base filling (bedrock)
             for (let y = 0; y < bedrockBase; ++y) {
                 blocks[x][y][z] = (Math.random() < 0.66 || y === 0) ? BLOCK.bedrock : BLOCK.deep_stone;
             }
 
-            // underground band (kept, but classification uses localStoneLevel)
-            const undergroundStart = bedrockBase + deepslateH;
-            const undergroundEnd = Math.max(bedrockBase + 1, h - 7);
+            // underground stratification band
+            const undergroundStart = bedrockBase + deepslateH; // inclusive
+            const undergroundEnd = Math.max(bedrockBase + 1, h - 7); // inclusive
             const undergroundHeight = Math.max(1, undergroundEnd - undergroundStart + 1);
 
             for (let y = bedrockBase; y <= h; ++y) {
                 let isLow = h < waterLine + 3;
 
-                // shoreline sand/snow
+                // shore sand / snow
                 if (isLow && y >= h - SAND_THICK + 1 && biome === "desert") { blocks[x][y][z] = BLOCK.sand; continue; }
                 if (isLow && y >= h - SAND_THICK + 1 && biome === "snow") { blocks[x][y][z] = BLOCK.snow; continue; }
 
-                // deep layers (ores prioritized)
+                // deep layers / deepslate / ore / lava
                 if (y < bedrockBase + deepslateH || (y < h - 6 && h > waterLine + 10 && Math.random() < 0.25)) {
+                    // try ore first
                     let ore = randomOre(x, y, z, 'deep_stone');
                     if (ore) { blocks[x][y][z] = ore; continue; }
 
-                    // classification by localStoneLevel with jitter
+                    // classify by localStoneLevel (with jitter)
                     if (y > localStoneLevel) {
                         blocks[x][y][z] = BLOCK.stone;
                     } else {
+                        // deep stone with occasional lava
                         if (y <= 12) {
                             let lavaCluster = 1 - valueNoise.worley(x/10, z/10, 6);
                             if (Math.random() < 0.015 * (0.6 + 1.4 * lavaCluster)) {
@@ -367,19 +376,22 @@ function createWorld() {
                     continue;
                 }
 
-                // near-surface sand/snow (coast)
+                // near-surface sand/snow (handled)
                 if (y >= h - SAND_THICK + 1 && isLow && biome === "desert") { blocks[x][y][z] = BLOCK.sand; continue; }
                 if (y >= h - SAND_THICK + 1 && isLow && biome === "snow") { blocks[x][y][z] = BLOCK.snow; continue; }
 
-                // upper underground: ore then mostly stone
+                // upper underground: ore sampling then mostly stone
                 if (y < h - 7) {
                     let ore = randomOre(x, y, z, 'stone');
-                    if (ore) { blocks[x][y][z] = ore; }
-                    else { blocks[x][y][z] = (Math.random() < 0.85) ? BLOCK.stone : BLOCK.deep_stone; }
+                    if (ore) {
+                        blocks[x][y][z] = ore;
+                    } else {
+                        blocks[x][y][z] = (Math.random() < 0.85) ? BLOCK.stone : BLOCK.deep_stone;
+                    }
                     continue;
                 }
 
-                // near-surface: stone/soil/sand and snow on mountain tops
+                // near-surface: soil or stone; mountain top snow logic
                 if (y < h) {
                     const localTopFrac = ((y - (h - 7)) / 7);
                     const topFracClamped = Math.max(0, Math.min(1, localTopFrac));
@@ -387,6 +399,7 @@ function createWorld() {
                     const mountainStoneBoost = mountainStrength * 0.6;
                     const stoneProb = Math.max(0, Math.min(0.98, baseStoneProb + mountainStoneBoost));
                     if (Math.random() < stoneProb) {
+                        // stone; if upper-half of mountain, may be snow (7/8)
                         if (mountainHeight > 0 && y >= snowThresholdY) {
                             blocks[x][y][z] = (Math.random() < 0.875) ? BLOCK.snow : BLOCK.stone;
                         } else {
@@ -400,13 +413,14 @@ function createWorld() {
 
                 // top block
                 if (y == h) {
-                    if (biome === "desert") {
-                        blocks[x][y][z] = BLOCK.sand;
-                    } else if (biome === "snow") {
-                        blocks[x][y][z] = BLOCK.snow;
-                    } else {
+                    if (biome === "desert") blocks[x][y][z] = BLOCK.sand;
+                    else if (biome === "snow") blocks[x][y][z] = BLOCK.snow;
+                    else {
                         if (mountainHeight > 0 && h >= snowThresholdY) {
                             blocks[x][y][z] = (Math.random() < 0.875) ? BLOCK.snow : BLOCK.grass;
+                        } else if (biome === "pillar") {
+                            // pillar biome surface = stone
+                            blocks[x][y][z] = BLOCK.stone;
                         } else {
                             blocks[x][y][z] = BLOCK.grass;
                         }
@@ -415,7 +429,7 @@ function createWorld() {
                 }
             }
 
-            // water fill for low areas
+            // water fill
             if (h < waterLine - 1) {
                 for (let y = h + 1; y < waterLine; ++y) blocks[x][y][z] = BLOCK.water;
             }
@@ -463,16 +477,18 @@ function createWorld() {
                 if (bottomY <= bedrockBase) bottomY = bedrockBase + 1;
                 // carve out
                 for (let cy = surfaceY; cy > bottomY; cy--) blocks[tx][cy][tz] = null;
-                // lake bottom
+                // lake bottom is sand
                 blocks[tx][bottomY][tz] = BLOCK.sand;
-                // fill liquid
+                // fill liquid from bottomY+1 up to surfaceY (inclusive)
                 for (let fy = bottomY + 1; fy <= surfaceY; fy++) {
                     if (lb === 'snow') {
                         blocks[tx][fy][tz] = BLOCK.ice;
                     } else if (lb === 'desert') {
+                        // desert lakes: small chance to be lava (e.g., 8%)
                         if (Math.random() < 0.08) blocks[tx][fy][tz] = BLOCK.lava;
                         else blocks[tx][fy][tz] = BLOCK.water;
                     } else {
+                        // forest and others: water
                         blocks[tx][fy][tz] = BLOCK.water;
                     }
                 }
@@ -495,14 +511,12 @@ function createWorld() {
                 break;
         if (y < 4) continue;
 
+        // pillar biome: do not place normal plants; instead generate some stone pillars here later
+        if (biome === "pillar") continue;
+
         if (biome === "desert") {
             if (Math.random() < CACTUS_SPAWN_PROB) {
-                let cactusHeight = 2 + Math.floor(Math.random() * CACTUS_MAX_HEIGHT); // 1..CACTUS_MAX_HEIGHT
-                let i = Math.random();
-                while (i < (1/cactusHeight)) {
-                    // 高度叠加，越高，概率越小
-                    cactusHeight ++;
-                }
+                let cactusHeight = 2 + Math.floor(Math.random() * CACTUS_MAX_HEIGHT);
                 for (let h2 = 1; h2 <= cactusHeight; ++h2) {
                     if (y + h2 >= WORLD_H) break;
                     if (blocks[tx][y+h2][tz] !== null) break;
@@ -549,13 +563,47 @@ function createWorld() {
         }
     }
 
+    // -------------------------
+    // Pillar biome: generate stone pillars at some positions
+    // -------------------------
+    // We do this after plants so we can ensure pillars stand on surface and avoid overwriting trees.
+    const PILLAR_ATTEMPTS = 300;
+    for (let attempt = 0; attempt < PILLAR_ATTEMPTS; attempt++) {
+        const px = Math.floor(Math.random() * (WORLD_W - 6)) + 3;
+        const pz = Math.floor(Math.random() * (WORLD_D - 6)) + 3;
+        if (getBiome(px, pz) !== "pillar") continue;
+        // find surface
+        let sy = -1;
+        for (let yy = WORLD_H - 5; yy > 2; --yy) {
+            if (blocks[px][yy][pz] !== null && blocks[px][yy+1][pz] == null) { sy = yy; break; }
+        }
+        if (sy < 4) continue;
+        // require surface is stone or close to stone
+        if (blocks[px][sy][pz] !== BLOCK.stone && blocks[px][sy][pz] !== BLOCK.deep_stone) continue;
+        const height = 8 + Math.floor(Math.random() * 8); // 8..15
+        for (let h = 1; h <= height; ++h) {
+            let yy = sy + h;
+            if (yy >= WORLD_H - 1) break;
+            // keep top as stone & quartz; avoid overwriting liquids
+            if (blocks[px][yy][pz] === BLOCK.water || blocks[px][yy][pz] === BLOCK.lava) break;
+            blocks[px][yy][pz] = BLOCK.stone;
+            blocks[px][yy+1][pz] = BLOCK.quartz_block;
+            blocks[px+1][yy+1][pz] = BLOCK.quartz_block;
+            blocks[px][yy+1][pz+1] = BLOCK.quartz_block;
+            blocks[px-1][yy+1][pz] = BLOCK.quartz_block;
+            blocks[px][yy+1][pz-1] = BLOCK.quartz_block;
+        }
+    }
+
     return blocks;
 }
+
 // ============ 游戏状态 & 初始化 ============
 const HOTBAR_SIZE = 8;
+// 更新物品栏：不要包含不可放置的 bedrock；8个常用项
 const DEFAULT_HOTBAR = [
     BLOCK.grass, BLOCK.soil, BLOCK.stone, BLOCK.sand,
-    BLOCK.banyan_wood, BLOCK.leaf_00, BLOCK.deep_stone, BLOCK.coal_mine
+    BLOCK.deep_stone, BLOCK.coal_mine, BLOCK.banyan_wood, BLOCK.cactus
 ];
 
 const gameState = {
@@ -623,12 +671,22 @@ function addBlockMesh(x, y, z, id) {
     blockMeshes.set(key, mesh);
 }
 
+function removeBlockMesh(x, y, z) {
+    const key = `${x}_${y}_${z}`;
+    const mesh = blockMeshes.get(key);
+    if (mesh) {
+        scene.remove(mesh);
+        blockMeshes.delete(key);
+    }
+}
+
 function renderVisibleBlocks() {
     const camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
     const minX = Math.max(0, camX - RENDER_DIST), maxX = Math.min(WORLD_W - 1, camX + RENDER_DIST);
     const minY = Math.max(0, camY - RENDER_DIST), maxY = Math.min(WORLD_H - 1, camY + RENDER_DIST);
     const minZ = Math.max(0, camZ - RENDER_DIST), maxZ = Math.min(WORLD_D - 1, camZ + RENDER_DIST);
 
+    // add / update
     for (let x = minX; x <= maxX; x++) {
         for (let y = minY; y <= maxY; y++) {
             for (let z = minZ; z <= maxZ; z++) {
@@ -650,6 +708,7 @@ function renderVisibleBlocks() {
         }
     }
 
+    // remove out-of-range
     for (const key of Array.from(blockMeshes.keys())) {
         const [sx, sy, sz] = key.split('_').map(Number);
         if (sx < minX || sx > maxX || sy < minY || sy > maxY || sz < minZ || sz > maxZ) {
@@ -662,23 +721,8 @@ function renderVisibleBlocks() {
     }
 }
 
-function removeBlockMesh(x, y, z) {
-    const key = `${x}_${y}_${z}`;
-    const mesh = blockMeshes.get(key);
-    if (mesh) {
-        scene.remove(mesh);
-        blockMeshes.delete(key);
-    }
-}
-
-window.addEventListener('resize', () => {
-    if (!renderer || !camera) return;
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-});
-
 // ===== Collision & movement (AABB + step-up) =====
+// Collides: axis-aligned capsule/AABB check. liquids ignored.
 function collidesAt(px, py, pz) {
     const r = 0.29;
     const minX = Math.floor(px - r);
@@ -716,32 +760,47 @@ function updateCamera() {
     camera.lookAt(gameState.px + lx, gameState.py + ly, gameState.pz + lz);
 }
 
+// improved stepPlayer: consistent forward/right vectors and better step-up logic
 function stepPlayer() {
-    let ang = gameState.lookH, speed = gameState.speed;
-    let dx = 0, dz = 0;
-    if (gameState.move.w) { dx += Math.sin(ang) * speed; dz += Math.cos(ang) * speed; }
-    if (gameState.move.s) { dx -= Math.sin(ang) * speed; dz -= Math.cos(ang) * speed; }
-    if (gameState.move.a) { dx -= Math.sin(ang + Math.PI/2) * speed; dz += Math.cos(ang + Math.PI/2) * speed; }
-    if (gameState.move.d) { dx -= Math.sin(ang - Math.PI/2) * speed; dz += Math.cos(ang - Math.PI/2) * speed; }
-    // A, D不要改(上面)
+    const ang = gameState.lookH;
+    const forwardX = Math.sin(ang), forwardZ = Math.cos(ang);
+    const rightX = Math.sin(ang + Math.PI/2), rightZ = Math.cos(ang + Math.PI/2);
+    const fw = (gameState.move.w ? 1 : 0) - (gameState.move.s ? 1 : 0);
+    const sd = (gameState.move.d ? 1 : 0) - (gameState.move.a ? 1 : 0);
+    const speed = gameState.speed;
+
+    let dx = (forwardX * fw + rightX * sd) * speed;
+    let dz = (forwardZ * fw + rightZ * sd) * speed;
+
+    // normalize diagonal speed
+    if (Math.abs(dx) > 0 && Math.abs(dz) > 0) {
+        const inv = 1 / Math.sqrt(2);
+        dx *= inv;
+        dz *= inv;
+    }
 
     let px = gameState.px, py = gameState.py, pz = gameState.pz;
-    if (!gameState.fly) gameState.vy -= 0.011;
-    let dy = gameState.fly ? ((gameState.move.up ? speed : 0) - (gameState.move.down ? speed : 0)) : gameState.vy;
 
+    if (!gameState.fly) gameState.vy -= 0.011;
+    const dy = gameState.fly ? ((gameState.move.up ? speed : 0) - (gameState.move.down ? speed : 0)) : gameState.vy;
+
+    // vertical movement first (gravity/jump)
     let newY = py + dy;
     if (!collidesAt(px, newY, pz)) {
         py = newY;
     } else {
         if (!gameState.fly) gameState.vy = 0;
+        // try small step up
         for (let t = 0.05; t <= 0.5; t += 0.05) {
             if (!collidesAt(px, py + t, pz)) { py = py + t; break; }
         }
     }
 
+    // helper: try move with step-up check (ensures both feet and head clearance)
     const tryStepMove = (targetX, targetY, targetZ, maxStep = 0.5) => {
         if (!collidesAt(targetX, targetY, targetZ)) return { success: true, nx: targetX, ny: targetY, nz: targetZ };
         for (let step = 0.05; step <= maxStep; step += 0.05) {
+            // check body at step and head clearance at step+0.85
             if (!collidesAt(targetX, targetY + step, targetZ) && !collidesAt(targetX, targetY + step + 0.85, targetZ)) {
                 return { success: true, nx: targetX, ny: targetY + step, nz: targetZ };
             }
@@ -749,53 +808,53 @@ function stepPlayer() {
         return { success: false };
     };
 
-    if (dx !== 0) {
+    if (Math.abs(dx) > 1e-6) {
         let res = tryStepMove(px + dx, py, pz);
         if (res.success) { px = res.nx; py = res.ny; pz = res.nz; }
     }
-    if (dz !== 0) {
+    if (Math.abs(dz) > 1e-6) {
         let res = tryStepMove(px, py, pz + dz);
         if (res.success) { px = res.nx; py = res.ny; pz = res.nz; }
         else {
+            // try diagonal
             let res2 = tryStepMove(px + dx, py, pz + dz);
             if (res2.success) { px = res2.nx; py = res2.ny; pz = res2.nz; }
         }
     }
 
+    // clamp into world
     px = Math.max(1, Math.min(WORLD_W - 2, px));
     py = Math.max(2, Math.min(WORLD_H - 2, py));
     pz = Math.max(1, Math.min(WORLD_D - 2, pz));
     Object.assign(gameState, { px, py, pz });
 }
 
-function animate() {
-    requestAnimationFrame(animate);
-    stepPlayer();
-    const camCellX = Math.floor(gameState.px), camCellY = Math.floor(gameState.py), camCellZ = Math.floor(gameState.pz);
-    if (camCellX !== lastCameraCell.x || camCellY !== lastCameraCell.y || camCellZ !== lastCameraCell.z) {
-        lastCameraCell.x = camCellX; lastCameraCell.y = camCellY; lastCameraCell.z = camCellZ;
-        renderVisibleBlocks();
-    }
-    updateCamera();
-    renderer && renderer.render(scene, camera);
-}
-
 // ===== Raycast & Input (liquids ignored) =====
+// improved raycast: returns hit block coords plus a safe placement coordinate (previous step)
 function raycastBlock(maxDist = 6) {
     let ox = gameState.px, oy = gameState.py + 0.6, oz = gameState.pz;
     let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
     let ly = Math.sin(gameState.lookV);
     let lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
-    for (let i = 0; i < maxDist * 15; i++) {
-        let d = i * 0.07;
+    const step = 0.07;
+    for (let i = 0; i < Math.ceil(maxDist / step); i++) {
+        let d = i * step;
         let x = ox + lx * d, y = oy + ly * d, z = oz + lz * d;
         let xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
         if (xi < 0 || xi >= WORLD_W || yi < 0 || yi >= WORLD_H || zi < 0 || zi >= WORLD_D) continue;
         let t = gameState.blocks[xi][yi][zi];
         if (t !== null) {
-            if (t === BLOCK.water || t === BLOCK.lava) continue;
-            let bx = x - lx * 0.08, by = y - ly * 0.08, bz = z - lz * 0.08;
-            return { x: xi, y: yi, z: zi, px: Math.floor(bx), py: Math.floor(by), pz: Math.floor(bz) };
+            if (t === BLOCK.water || t === BLOCK.lava) continue; // ignore liquids
+            // previous point along ray to get placement spot
+            const dPrev = Math.max(0, d - step);
+            let px = Math.floor(ox + lx * dPrev);
+            let py = Math.floor(oy + ly * dPrev);
+            let pz = Math.floor(oz + lz * dPrev);
+            // clamp placement coords
+            px = clamp(px, 0, WORLD_W - 1);
+            py = clamp(py, 0, WORLD_H - 1);
+            pz = clamp(pz, 0, WORLD_D - 1);
+            return { x: xi, y: yi, z: zi, px, py, pz };
         }
     }
     return null;
@@ -806,18 +865,21 @@ function onMousedown(e) {
     const hit = raycastBlock();
     if (!hit) return;
     if (e.button == 0) {
+        // left click: dig
         if (gameState.blocks[hit.x][hit.y][hit.z] !== BLOCK.bedrock) {
             gameState.blocks[hit.x][hit.y][hit.z] = null;
             removeBlockMesh(hit.x, hit.y, hit.z);
         }
     }
     if (e.button == 2) {
+        // right click: place into previous empty spot
         let { px, py, pz } = hit;
         if (px < 0 || px >= WORLD_W || py < 0 || py >= WORLD_H || pz < 0 || pz >= WORLD_D) return;
-        if (gameState.blocks[px][py][pz] == null
-            && Math.abs(px - gameState.px) > 0.7
-            && Math.abs(py - gameState.py) > 1.0
-            && Math.abs(pz - gameState.pz) > 0.7) {
+        // relax distance checks slightly but still prevent placing inside player
+        if (Math.abs(px + 0.5 - gameState.px) < 0.6 && Math.abs(py + 0.5 - gameState.py) < 1.1 && Math.abs(pz + 0.5 - gameState.pz) < 0.6) {
+            return;
+        }
+        if (gameState.blocks[px][py][pz] == null) {
             let id = gameState.hotbar[gameState.selectedSlot];
             gameState.blocks[px][py][pz] = id;
             addBlockMesh(px, py, pz, id);
