@@ -121,7 +121,8 @@ const COLORS = [
     0x4CAF50,0x8B5A2B,0x888888,0x8B4513,0x19cc19,0x17a44a,
     0x4091F7,0x000000,0xDED39E,0x3A3A3A,0xEF0000,
     0x222222,0xF18D36,0xBFC7C7,0xc7bb80,0x68e0ff,
-    0xFFFFFF,0xEEEEEE,0x2E8B57,0xA0522D
+    0xFFFFFF,0xEEEEEE,0x2E8B57,0xA0522D,
+    0xF5F5F0 // quartz (浅石英色)
 ];
 const BLOCKNAMES = [
     "grass","soil","stone","banyan_wood","leaf_00","leaf_07",
@@ -171,7 +172,7 @@ const BLOCK_TEXTURE_MAP = {
     [BLOCK.snow]:    { side: "snow.png" },
     [BLOCK.cactus]:  { top: "cactus_top.png", side: "cactus.png" },
     [BLOCK.fir_wood]:{ top: "fir_wood_top.png", side: "fir_wood.png", bottom: "fir_wood_bottom.png" },
-    [BLOCK.quartz_block.png]:{ side: "quartz_block.png" }
+    [BLOCK.quartz_block]: { side: "quartz_block.png" }
 };
 
 // 预加载贴图（按文件名 key 存入 BLOCK_TEXTURES）
@@ -214,7 +215,7 @@ function makeMaterialFromTexOrColor(tex, color, opts = {}) {
 }
 
 // ===== World constants =====
-const WORLD_W = 1024, WORLD_D = 1024, WORLD_H = 128, SAND_THICK = 3; // 扩张大小
+const WORLD_W = Math.pow(2,11), WORLD_D = Math.pow(2,11), WORLD_H = 128, SAND_THICK = 3; // 扩张大小
 let RENDER_DIST = 15; // 可调整渲染距离
 const perlin = new PerlinNoise(20230519);
 const valueNoise = new ValueNoise(54188114514);
@@ -265,7 +266,7 @@ function randomOre(x, y, z, type = 'deep_stone') {
 }
 
 // =========== createWorld ===========
-// 完整实现，含：放大起伏的山、石柱群系、湖泊、每列 stone/deep_stone 抖动、仙人掌 & 秃树
+// 山、石柱群系、湖泊、每列 stone/deep_stone 抖动、仙人掌 & 秃树 & 沙漠 quartz 簇
 function createWorld() {
     const blocks = new Array(WORLD_W);
     for (let x = 0; x < WORLD_W; x++) {
@@ -283,12 +284,12 @@ function createWorld() {
     const MOUNTAIN_LIFT = 10;
     const BASE_AMPLITUDE_FACTOR = 0.30;
 
-    // New: stone/deep_stone cutoff Y baseline
+    // 石头和深层石头分界线
     const STONE_LEVEL_Y = Math.floor(WORLD_H * 0.35); // 基准分界线
 
-    // Lake / cactus / tree tuning
+    // 湖泊、仙人掌、秃树参数
     const LAKE_ATTEMPTS = 600;
-    const CACTUS_SPAWN_PROB = 0.72; // 提高仙人掌出现概率
+    const CACTUS_SPAWN_PROB = 0.72; // 仙人掌出现概率
     const CACTUS_MAX_HEIGHT = 5;    // 仙人掌最高高度
     const BALD_TREE_PROB = 0.05;    // 5% 概率不生成树叶
 
@@ -421,10 +422,41 @@ function createWorld() {
                         } else if (biome === "pillar") {
                             // pillar biome surface = stone
                             blocks[x][y][z] = BLOCK.stone;
+                            blocks[x][y][z] = BLOCK.quartz_block;
                         } else {
                             blocks[x][y][z] = BLOCK.grass;
                         }
                     }
+
+                    // --- 新增：沙漠表面 5% 概率生成 quartz 簇（使用 Worley 形成簇状） ---
+                    if (biome === "desert" && Math.random() < 0.05) {
+                        const clusterSeed = valueNoise.worley(x/6, z/6, 6);
+                        const clusterRadius = 1 + (clusterSeed > 0.5 ? 1 : 0); // radius 1 或 2
+                        for (let ox = -clusterRadius; ox <= clusterRadius; ox++) {
+                            for (let oz = -clusterRadius; oz <= clusterRadius; oz++) {
+                                const dx = ox, dz = oz;
+                                if (dx*dx + dz*dz > (clusterRadius + 0.0001)*(clusterRadius + 0.0001)) continue;
+                                const gx = x + ox, gz = z + oz;
+                                if (gx < 0 || gx >= WORLD_W || gz < 0 || gz >= WORLD_D) continue;
+                                // 找到该列地表 y
+                                let gy = -1;
+                                for (let yy = WORLD_H - 5; yy > 2; --yy) {
+                                    if ([BLOCK.grass, BLOCK.soil, BLOCK.sand, BLOCK.snow].includes(blocks[gx][yy][gz]) && blocks[gx][yy+1][gz] == null) {
+                                        gy = yy; break;
+                                    }
+                                }
+                                if (gy < 4) continue;
+                                // 仅在砂层顶上放 quartz 且上方空位
+                                if (blocks[gx][gy][gz] === BLOCK.sand && blocks[gx][gy+1][gz] == null) {
+                                    const p = 0.6 * (1 - valueNoise.worley(gx/3, gz/3, 6));
+                                    if (Math.random() < p) {
+                                        blocks[gx][gy+1][gz] = BLOCK.quartz_block;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // --- end quartz cluster ---
                     continue;
                 }
             }
@@ -830,14 +862,16 @@ function stepPlayer() {
 }
 
 // ===== Raycast & Input (liquids ignored) =====
-// improved raycast: returns hit block coords plus a safe placement coordinate (previous step)
+// improved raycast: returns hit block coords plus a safe placement coordinate (adjacent cell by face)
 function raycastBlock(maxDist = 6) {
     let ox = gameState.px, oy = gameState.py + 0.6, oz = gameState.pz;
     let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
     let ly = Math.sin(gameState.lookV);
     let lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
     const step = 0.07;
-    for (let i = 0; i < Math.ceil(maxDist / step); i++) {
+    const steps = Math.ceil(maxDist / step);
+
+    for (let i = 0; i < steps; i++) {
         let d = i * step;
         let x = ox + lx * d, y = oy + ly * d, z = oz + lz * d;
         let xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
@@ -845,15 +879,26 @@ function raycastBlock(maxDist = 6) {
         let t = gameState.blocks[xi][yi][zi];
         if (t !== null) {
             if (t === BLOCK.water || t === BLOCK.lava) continue; // ignore liquids
-            // previous point along ray to get placement spot
-            const dPrev = Math.max(0, d - step);
-            let px = Math.floor(ox + lx * dPrev);
-            let py = Math.floor(oy + ly * dPrev);
-            let pz = Math.floor(oz + lz * dPrev);
-            // clamp placement coords
+
+            // 确定主导轴以计算被击中的面，然后选择相邻格作为放置位置
+            const ax = Math.abs(lx), ay = Math.abs(ly), az = Math.abs(lz);
+            let px = xi, py = yi, pz = zi;
+            if (ax >= ay && ax >= az) {
+                // x 主导
+                px = xi - Math.sign(lx);
+            } else if (ay >= ax && ay >= az) {
+                // y 主导
+                py = yi - Math.sign(ly);
+            } else {
+                // z 主导
+                pz = zi - Math.sign(lz);
+            }
+
+            // 保证在世界范围内
             px = clamp(px, 0, WORLD_W - 1);
             py = clamp(py, 0, WORLD_H - 1);
             pz = clamp(pz, 0, WORLD_D - 1);
+
             return { x: xi, y: yi, z: zi, px, py, pz };
         }
     }
