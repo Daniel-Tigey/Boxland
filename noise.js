@@ -670,6 +670,45 @@ function setupThree() {
     const ambient = new THREE.AmbientLight(0xffffff, 0.72); scene.add(ambient);
     const dir = new THREE.DirectionalLight(0xffffee, 1.1); dir.position.set(60, 80, 5); scene.add(dir);
     blockMeshes = new Map();
+
+    // resize handling (minimal safe addition)
+    window.addEventListener('resize', () => {
+        if (!camera || !renderer) return;
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+}
+
+// animation loop (added to fix "animate is not defined")
+function animate() {
+    requestAnimationFrame(animate);
+    // update player physics / movement
+    try {
+        stepPlayer();
+    } catch (err) {
+        // swallow errors to avoid breaking the loop in unexpected states
+        console.error("stepPlayer error:", err);
+    }
+
+    // update visible blocks when camera cell changes (cheap check)
+    const camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
+    if (camX !== lastCameraCell.x || camY !== lastCameraCell.y || camZ !== lastCameraCell.z) {
+        try {
+            renderVisibleBlocks();
+        } catch (err) {
+            console.error("renderVisibleBlocks error:", err);
+        }
+        lastCameraCell.x = camX; lastCameraCell.y = camY; lastCameraCell.z = camZ;
+    }
+
+    // update camera transform and render
+    try {
+        updateCamera();
+        renderer.render(scene, camera);
+    } catch (err) {
+        console.error("render error:", err);
+    }
 }
 
 function addBlockMesh(x, y, z, id) {
