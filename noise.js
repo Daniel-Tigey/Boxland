@@ -215,7 +215,7 @@ function makeMaterialFromTexOrColor(tex, color, opts = {}) {
 }
 
 // ===== World constants =====
-const WORLD_W = Math.pow(2,11), WORLD_D = Math.pow(2,11), WORLD_H = 128, SAND_THICK = 3; // 扩张大小
+const WORLD_W = 1024, WORLD_D = 1024, WORLD_H = 128, SAND_THICK = 3; // 扩张大小
 let RENDER_DIST = 15; // 可调整渲染距离
 const perlin = new PerlinNoise(20230519);
 const valueNoise = new ValueNoise(54188114514);
@@ -428,7 +428,7 @@ function createWorld() {
                         }
                     }
 
-                    // --- 新增：沙漠表面 5% 概率生成 quartz 簇（使用 Worley 形成簇状） ---
+                    // 石英簇
                     if (biome === "desert" && Math.random() < 0.05) {
                         const clusterSeed = valueNoise.worley(x/6, z/6, 6);
                         const clusterRadius = 1 + (clusterSeed > 0.5 ? 1 : 0); // radius 1 或 2
@@ -632,7 +632,6 @@ function createWorld() {
 
 // ============ 游戏状态 & 初始化 ============
 const HOTBAR_SIZE = 8;
-// 更新物品栏：不要包含不可放置的 bedrock；8个常用项
 const DEFAULT_HOTBAR = [
     BLOCK.grass, BLOCK.soil, BLOCK.stone, BLOCK.sand,
     BLOCK.deep_stone, BLOCK.coal_mine, BLOCK.banyan_wood, BLOCK.cactus
