@@ -287,6 +287,9 @@ function createWorld() {
     // 石头和深层石头分界线
     const STONE_LEVEL_Y = Math.floor(WORLD_H * 0.35); // 基准分界线
 
+    // NEW: 固定 deep_stone 阈值（Y 小于此值则为 deep_stone，否则为 stone）
+    const DEEPSTONE_LEVEL = Math.max(0, bedrockBase + deepslateH + 1); // 确保大于 bedrockBase
+
     // 湖泊、仙人掌、秃树参数
     const LAKE_ATTEMPTS = 600;
     const CACTUS_SPAWN_PROB = 0.72; // 仙人掌出现概率
@@ -356,14 +359,12 @@ function createWorld() {
 
                 // deep layers / deepslate / ore / lava
                 if (y < bedrockBase + deepslateH || (y < h - 6 && h > waterLine + 10 && Math.random() < 0.25)) {
-                    // try ore first
+                    // try ore first (use deep_stone type for ore sampling here)
                     let ore = randomOre(x, y, z, 'deep_stone');
                     if (ore) { blocks[x][y][z] = ore; continue; }
 
-                    // classify by localStoneLevel (with jitter)
-                    if (y > localStoneLevel) {
-                        blocks[x][y][z] = BLOCK.stone;
-                    } else {
+                    // classify by deterministic Y cutoff: y < DEEPSTONE_LEVEL -> deep_stone, else stone
+                    if (y < DEEPSTONE_LEVEL) {
                         // deep stone with occasional lava
                         if (y <= 12) {
                             let lavaCluster = 1 - valueNoise.worley(x/10, z/10, 6);
@@ -373,6 +374,8 @@ function createWorld() {
                             }
                         }
                         blocks[x][y][z] = BLOCK.deep_stone;
+                    } else {
+                        blocks[x][y][z] = BLOCK.stone;
                     }
                     continue;
                 }
@@ -381,13 +384,15 @@ function createWorld() {
                 if (y >= h - SAND_THICK + 1 && isLow && biome === "desert") { blocks[x][y][z] = BLOCK.sand; continue; }
                 if (y >= h - SAND_THICK + 1 && isLow && biome === "snow") { blocks[x][y][z] = BLOCK.snow; continue; }
 
-                // upper underground: ore sampling then mostly stone
+                // upper underground: ore sampling then deterministic stone/deep_stone
                 if (y < h - 7) {
                     let ore = randomOre(x, y, z, 'stone');
                     if (ore) {
                         blocks[x][y][z] = ore;
                     } else {
-                        blocks[x][y][z] = (Math.random() < 0.85) ? BLOCK.stone : BLOCK.deep_stone;
+                        // deterministic: below DEEPSTONE_LEVEL => deep_stone else stone
+                        if (y < DEEPSTONE_LEVEL) blocks[x][y][z] = BLOCK.deep_stone;
+                        else blocks[x][y][z] = BLOCK.stone;
                     }
                     continue;
                 }
@@ -658,6 +663,38 @@ const SHARED_GEOMETRY = new THREE.BoxGeometry(1, 1, 1);
 const MATERIAL_CACHE = new Map();
 let lastCameraCell = { x: -9999, y: -9999, z: -9999 };
 
+// helper: 判断方块是否不透明（用于遮挡剔除）
+// 认为 water/lava/transparent textures (按 BLOCK_TEXTURE_MAP transparent 标注) 为非不透明
+function isOpaque(blockId) {
+    if (blockId == null) return false;
+    if (blockId === BLOCK.water || blockId === BLOCK.lava) return false;
+    const desc = BLOCK_TEXTURE_MAP[blockId];
+    if (desc && desc.transparent) return false;
+    return true;
+}
+
+// 判断方块是否被六面完全遮挡（六个相邻方向都有不透明方块）
+// 边界处的不可访问视作不透明（以保守为主）
+function isBlockOccluded(x, y, z) {
+    // if block itself is null or not opaque, it's not occluded (we only occlude opaque blocks)
+    const id = gameState.blocks[x][y][z];
+    if (id == null) return false;
+    if (!isOpaque(id)) return false;
+
+    const neighbors = [
+        [x+1,y,z],[x-1,y,z],[x,y+1,z],[x,y-1,z],[x,y,z+1],[x,y,z-1]
+    ];
+    for (let [nx,ny,nz] of neighbors) {
+        if (nx < 0 || nx >= WORLD_W || ny < 0 || ny >= WORLD_H || nz < 0 || nz >= WORLD_D) {
+            // treat out-of-bounds as opaque so we keep occluding inside world
+            continue;
+        }
+        const nid = gameState.blocks[nx][ny][nz];
+        if (!isOpaque(nid)) return false;
+    }
+    return true;
+}
+
 function setupThree() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x81D4FA);
@@ -750,6 +787,7 @@ function removeBlockMesh(x, y, z) {
     }
 }
 
+// 新的 renderVisibleBlocks: 避免渲染完全被六面遮挡的方块（occlusion culling）
 function renderVisibleBlocks() {
     const camX = Math.floor(gameState.px), camY = Math.floor(gameState.py), camZ = Math.floor(gameState.pz);
     const minX = Math.max(0, camX - RENDER_DIST), maxX = Math.min(WORLD_W - 1, camX + RENDER_DIST);
@@ -763,6 +801,14 @@ function renderVisibleBlocks() {
                 const id = gameState.blocks[x][y][z];
                 const key = `${x}_${y}_${z}`;
                 if (id !== null) {
+                    // occlusion culling
+                    const occluded = isBlockOccluded(x, y, z);
+                    if (occluded) {
+                        // if currently rendered, remove it
+                        if (blockMeshes.has(key)) removeBlockMesh(x, y, z);
+                        continue; // skip rendering occluded blocks
+                    }
+
                     if (!blockMeshes.has(key)) {
                         addBlockMesh(x, y, z, id);
                     } else {
@@ -773,6 +819,9 @@ function renderVisibleBlocks() {
                             mesh.__blockId = id;
                         }
                     }
+                } else {
+                    // if null but mesh exists (shouldn't normally), remove it
+                    if (blockMeshes.has(key)) removeBlockMesh(x, y, z);
                 }
             }
         }
@@ -786,6 +835,11 @@ function renderVisibleBlocks() {
             if (mesh) {
                 scene.remove(mesh);
                 blockMeshes.delete(key);
+            }
+        } else {
+            // also remove if occluded now
+            if (isBlockOccluded(sx, sy, sz)) {
+                removeBlockMesh(sx, sy, sz);
             }
         }
     }
@@ -822,6 +876,26 @@ function canStand(nx, ny, nz) {
     return !collidesAt(nx, ny, nz);
 }
 
+// 更稳健的地面检测：检测脚下一点是否有实块接触（用于允许跳跃）
+function isOnGround(px, py, pz) {
+    const r = 0.29;
+    // player foot approximate height offset: feet are around py - 0.8..py - 0.9
+    const footCheckY = py - 0.9;
+    const checkY = Math.floor(footCheckY);
+    const minX = Math.floor(px - r), maxX = Math.floor(px + r);
+    const minZ = Math.floor(pz - r), maxZ = Math.floor(pz + r);
+    for (let x = minX; x <= maxX; x++) {
+        for (let z = minZ; z <= maxZ; z++) {
+            if (x < 0 || x >= WORLD_W || z < 0 || z >= WORLD_D) continue;
+            const b = gameState.blocks[x][checkY] || null;
+            if (b !== null && b !== BLOCK.water && b !== BLOCK.lava) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 function updateCamera() {
     camera.position.set(gameState.px, gameState.py, gameState.pz);
     let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
@@ -830,69 +904,110 @@ function updateCamera() {
     camera.lookAt(gameState.px + lx, gameState.py + ly, gameState.pz + lz);
 }
 
-// improved stepPlayer: consistent forward/right vectors and better step-up logic
+// improved stepPlayer: use camera forward/right projected to XZ, normalize composite vector
+// and robust vertical collision handling to avoid getting stuck and to enable consistent jumps.
 function stepPlayer() {
-    const ang = gameState.lookH;
-    const forwardX = Math.sin(ang), forwardZ = Math.cos(ang);
-    const rightX = Math.sin(ang + Math.PI/2), rightZ = Math.cos(ang + Math.PI/2);
-    const fw = (gameState.move.w ? 1 : 0) - (gameState.move.s ? 1 : 0);
-    const sd = (gameState.move.d ? 1 : 0) - (gameState.move.a ? 1 : 0);
+    // Build forward vector from look angles, then project to XZ plane and normalize
+    const lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
+    const lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
+    let forward = { x: lx, z: lz };
+    // project to XZ and normalize
+    const fLen = Math.sqrt(forward.x*forward.x + forward.z*forward.z) || 1;
+    forward.x /= fLen; forward.z /= fLen;
+    // right is perpendicular on XZ plane
+    const right = { x: -forward.z, z: forward.x };
+
+    // input
+    const fwInput = (gameState.move.w ? 1 : 0) - (gameState.move.s ? 1 : 0);
+    const sdInput = (gameState.move.d ? 1 : 0) - (gameState.move.a ? 1 : 0);
     const speed = gameState.speed;
 
-    let dx = (forwardX * fw + rightX * sd) * speed;
-    let dz = (forwardZ * fw + rightZ * sd) * speed;
+    // compose movement vector in world XZ using forward/right basis
+    let mvx = forward.x * fwInput + right.x * sdInput;
+    let mvz = forward.z * fwInput + right.z * sdInput;
 
-    // normalize diagonal speed
-    if (Math.abs(dx) > 0 && Math.abs(dz) > 0) {
-        const inv = 1 / Math.sqrt(2);
-        dx *= inv;
-        dz *= inv;
-    }
+    // normalize if magnitude > 0 to avoid diagonal fast/slow depending on direction
+    const mvLen = Math.sqrt(mvx*mvx + mvz*mvz);
+    if (mvLen > 1e-6) {
+        mvx = (mvx / mvLen) * speed;
+        mvz = (mvz / mvLen) * speed;
+    } else { mvx = 0; mvz = 0; }
 
     let px = gameState.px, py = gameState.py, pz = gameState.pz;
 
+    // gravity / vertical velocity
     if (!gameState.fly) gameState.vy -= 0.011;
-    const dy = gameState.fly ? ((gameState.move.up ? speed : 0) - (gameState.move.down ? speed : 0)) : gameState.vy;
+    const dyRaw = gameState.fly ? ((gameState.move.up ? speed : 0) - (gameState.move.down ? speed : 0)) : gameState.vy;
 
-    // vertical movement first (gravity/jump)
-    let newY = py + dy;
-    if (!collidesAt(px, newY, pz)) {
-        py = newY;
-    } else {
-        if (!gameState.fly) gameState.vy = 0;
-        // try small step up
-        for (let t = 0.05; t <= 0.5; t += 0.05) {
-            if (!collidesAt(px, py + t, pz)) { py = py + t; break; }
+    // robust vertical movement: step through dy in small increments to find collision
+    function applyVertical(px, py, pz, dy) {
+        if (Math.abs(dy) < 1e-6) return { py: py, landed: false, hitHead: false };
+        const steps = Math.max(1, Math.ceil(Math.abs(dy) / 0.05));
+        for (let i = 1; i <= steps; i++) {
+            const ny = py + dy * (i / steps);
+            if (!collidesAt(px, ny, pz)) {
+                // continue until last step
+                if (i === steps) return { py: ny, landed: false, hitHead: false };
+                continue;
+            } else {
+                // collision occurred at this intermediate step
+                if (dy < 0) {
+                    // falling — place player just above the block we collided with
+                    // find the highest non-colliding y below ny
+                    // place at floor(ny) + 1 + tiny epsilon
+                    const landY = Math.floor(ny) + 1 + 0.001;
+                    return { py: landY, landed: true, hitHead: false };
+                } else {
+                    // going up and hit ceiling — place just below the block
+                    const stopY = Math.floor(ny) - 0.001;
+                    return { py: stopY, landed: false, hitHead: true };
+                }
+            }
         }
+        return { py: py + dy, landed: false, hitHead: false };
     }
 
-    // helper: try move with step-up check (ensures both feet and head clearance)
+    const vertRes = applyVertical(px, py, pz, dyRaw);
+    py = vertRes.py;
+    if (vertRes.landed) {
+        if (!gameState.fly) gameState.vy = 0;
+    }
+    if (vertRes.hitHead) {
+        gameState.vy = 0;
+    }
+
+    // helper: try horizontal move with step-up (ensure foot and head clearance)
     const tryStepMove = (targetX, targetY, targetZ, maxStep = 0.5) => {
+        // if no collision at same Y, ok
         if (!collidesAt(targetX, targetY, targetZ)) return { success: true, nx: targetX, ny: targetY, nz: targetZ };
+        // try to step up small amounts
         for (let step = 0.05; step <= maxStep; step += 0.05) {
-            // check body at step and head clearance at step+0.85
-            if (!collidesAt(targetX, targetY + step, targetZ) && !collidesAt(targetX, targetY + step + 0.85, targetZ)) {
+            // foot at targetY + step, head at targetY + step + bodyHeight
+            const footY = targetY + step;
+            const headY = targetY + step + 1.64; // player height used in collidesAt
+            if (!collidesAt(targetX, footY, targetZ) && !collidesAt(targetX, headY, targetZ)) {
                 return { success: true, nx: targetX, ny: targetY + step, nz: targetZ };
             }
         }
         return { success: false };
     };
 
-    if (Math.abs(dx) > 1e-6) {
-        let res = tryStepMove(px + dx, py, pz);
+    // horizontal movement attempts (separately on x and z to allow sliding)
+    if (Math.abs(mvx) > 1e-6) {
+        const res = tryStepMove(px + mvx, py, pz);
         if (res.success) { px = res.nx; py = res.ny; pz = res.nz; }
     }
-    if (Math.abs(dz) > 1e-6) {
-        let res = tryStepMove(px, py, pz + dz);
+    if (Math.abs(mvz) > 1e-6) {
+        const res = tryStepMove(px, py, pz + mvz);
         if (res.success) { px = res.nx; py = res.ny; pz = res.nz; }
         else {
-            // try diagonal
-            let res2 = tryStepMove(px + dx, py, pz + dz);
+            // try diagonal move as fallback
+            const res2 = tryStepMove(px + mvx, py, pz + mvz);
             if (res2.success) { px = res2.nx; py = res2.ny; pz = res2.nz; }
         }
     }
 
-    // clamp into world
+    // clamp into world safely
     px = Math.max(1, Math.min(WORLD_W - 2, px));
     py = Math.max(2, Math.min(WORLD_H - 2, py));
     pz = Math.max(1, Math.min(WORLD_D - 2, pz));
@@ -952,6 +1067,8 @@ function onMousedown(e) {
         if (gameState.blocks[hit.x][hit.y][hit.z] !== BLOCK.bedrock) {
             gameState.blocks[hit.x][hit.y][hit.z] = null;
             removeBlockMesh(hit.x, hit.y, hit.z);
+            // update nearby because occlusion might change
+            renderVisibleBlocks();
         }
     }
     if (e.button == 2) {
@@ -965,7 +1082,8 @@ function onMousedown(e) {
         if (gameState.blocks[px][py][pz] == null) {
             let id = gameState.hotbar[gameState.selectedSlot];
             gameState.blocks[px][py][pz] = id;
-            addBlockMesh(px, py, pz, id);
+            // update nearby because occlusion might change
+            renderVisibleBlocks();
         }
     }
 }
@@ -994,7 +1112,7 @@ function setupInput() {
         if (e.code === 'KeyD') gameState.move.d = 1;
         if (e.code === 'Space') {
             if (gameState.fly) gameState.move.up = 1;
-            else if (gameState.vy === 0 && canStand(gameState.px, gameState.py - 0.2, gameState.pz)) gameState.vy = 0.32;
+            else if (isOnGround(gameState.px, gameState.py, gameState.pz)) gameState.vy = 0.32;
         }
         if (e.code === 'ShiftLeft') gameState.move.down = 1;
         if (e.code === 'KeyF') gameState.fly = !gameState.fly;
