@@ -328,6 +328,12 @@ function createWorld() {
             // vertical bias scaled by mountainStrength, include required extra lift
             let verticalBias = Math.round((MOUNTAIN_BIAS + MOUNTAIN_LIFT) * mountainStrength);
 
+            // FLATTEN non-snow biomes: 除 snow 外的大多数群系更平坦
+            if (biome !== 'snow') {
+                amplitudeFactor *= 0.5; // 降低振幅
+                verticalBias = Math.round(verticalBias * 0.5); // 减少垂直偏移
+            }
+
             // compute height
             let h0 = Math.floor(WORLD_H * 0.28 + base * WORLD_H * amplitudeFactor + verticalBias);
             let h = clamp(h0, 5, WORLD_H - 2);
@@ -675,10 +681,16 @@ const gameState = {
     lookH: Math.PI / 2, lookV: -0.30,
     fly: false,
     move: { w: 0, a: 0, s: 0, d: 0, up: 0, down: 0 },
-    speed: 0.17, size: 0.6,
+    // walking vs flying speeds
+    walkSpeed: 0.10, // slower walking speed
+    flySpeed: 0.34,  // faster flying speed
+    speed: 0.10, // legacy default (not used for movement calculations directly)
+    size: 0.6,
     blocks: null,
     hotbar: DEFAULT_HOTBAR.slice(),
-    selectedSlot: 0
+    selectedSlot: 0,
+    grounded: false, // whether player is on ground
+    groundGrace: 0   // frames of coyote time allowed for jumping after leaving ground
 };
 gameState.blocks = createWorld();
 window.gameState = gameState;
@@ -688,6 +700,10 @@ let camera, scene, renderer, blockMeshes;
 const SHARED_GEOMETRY = new THREE.BoxGeometry(1, 1, 1);
 const MATERIAL_CACHE = new Map();
 let lastCameraCell = { x: -9999, y: -9999, z: -9999 };
+
+// camera smoothing Y to avoid jitter
+let cameraSmoothY = gameState.py;
+const CAMERA_SMOOTH_ALPHA = 0.12; // lerp factor (0..1), 越大相机越迅速跟随
 
 // helper: 判断方块是否不透明（用于遮挡剔除）
 // 认为 water/lava/transparent textures (按 BLOCK_TEXTURE_MAP transparent 标注) 为非不透明
@@ -923,20 +939,19 @@ function isOnGround(px, py, pz) {
 }
 
 function updateCamera() {
-    camera.position.set(gameState.px, gameState.py, gameState.pz);
+    // Smooth camera Y to prevent jitter; cameraSmoothY follows gameState.py by lerp
+    cameraSmoothY += (gameState.py - cameraSmoothY) * CAMERA_SMOOTH_ALPHA;
+
+    camera.position.set(gameState.px, cameraSmoothY, gameState.pz);
     let lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
     let ly = Math.sin(gameState.lookV);
     let lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
-    camera.lookAt(gameState.px + lx, gameState.py + ly, gameState.pz + lz);
+    camera.lookAt(gameState.px + lx, cameraSmoothY + ly, gameState.pz + lz);
 }
 
 // improved stepPlayer: use camera forward/right projected to XZ, normalize composite vector
 // and robust vertical collision handling to avoid getting stuck and to enable consistent jumps.
-// Added small hysteresis to vertical position to avoid tiny oscillations that cause view jitter.
 function stepPlayer() {
-    // store previous py for hysteresis to avoid tiny up/down jitter
-    const prevPy = gameState.py;
-
     // Build forward vector from look angles, then project to XZ plane and normalize
     const lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
     const lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
@@ -950,7 +965,9 @@ function stepPlayer() {
     // input
     const fwInput = (gameState.move.w ? 1 : 0) - (gameState.move.s ? 1 : 0);
     const sdInput = (gameState.move.d ? 1 : 0) - (gameState.move.a ? 1 : 0);
-    const speed = gameState.speed;
+
+    // choose speed based on fly flag
+    const speed = gameState.fly ? gameState.flySpeed : gameState.walkSpeed;
 
     // compose movement vector in world XZ using forward/right basis
     let mvx = forward.x * fwInput + right.x * sdInput;
@@ -971,43 +988,44 @@ function stepPlayer() {
 
     // robust vertical movement: step through dy in small increments to find collision
     function applyVertical(px, py, pz, dy) {
-        if (Math.abs(dy) < 1e-6) return { py: py, landed: false, hitHead: false };
+        if (Math.abs(dy) < 1e-6) return { py: py, landed: false, hitHead: false, collided: false };
         const steps = Math.max(1, Math.ceil(Math.abs(dy) / 0.05));
         for (let i = 1; i <= steps; i++) {
             const ny = py + dy * (i / steps);
             if (!collidesAt(px, ny, pz)) {
                 // continue until last step
-                if (i === steps) return { py: ny, landed: false, hitHead: false };
+                if (i === steps) return { py: ny, landed: false, hitHead: false, collided: false };
                 continue;
             } else {
                 // collision occurred at this intermediate step
                 if (dy < 0) {
                     // falling — place player just above the block we collided with
                     const landY = Math.floor(ny) + 1 + 0.001;
-                    return { py: landY, landed: true, hitHead: false };
+                    return { py: landY, landed: true, hitHead: false, collided: true };
                 } else {
                     // going up and hit ceiling — place just below the block
                     const stopY = Math.floor(ny) - 0.001;
-                    return { py: stopY, landed: false, hitHead: true };
+                    return { py: stopY, landed: false, hitHead: true, collided: true };
                 }
             }
         }
-        return { py: py + dy, landed: false, hitHead: false };
+        return { py: py + dy, landed: false, hitHead: false, collided: false };
     }
 
     const vertRes = applyVertical(px, py, pz, dyRaw);
     py = vertRes.py;
     if (vertRes.landed) {
         if (!gameState.fly) gameState.vy = 0;
-    }
-    if (vertRes.hitHead) {
-        gameState.vy = 0;
-    }
-
-    // hysteresis: avoid tiny y oscillations that cause camera jitter
-    const Y_HYSTERESIS = 0.03;
-    if (!gameState.fly && Math.abs(py - prevPy) < Y_HYSTERESIS) {
-        py = prevPy;
+        // set grounded and coyote time frames
+        gameState.grounded = true;
+        gameState.groundGrace = 6; // allow jump for next few frames
+    } else {
+        // decrement groundGrace each frame if > 0
+        if (gameState.groundGrace > 0) gameState.groundGrace = Math.max(0, gameState.groundGrace - 1);
+        if (gameState.groundGrace === 0) gameState.grounded = false;
+        if (vertRes.hitHead) {
+            gameState.vy = 0;
+        }
     }
 
     // helper: try horizontal move with step-up (ensure foot and head clearance)
@@ -1145,8 +1163,17 @@ function setupInput() {
         if (e.code === 'KeyS') gameState.move.s = 1;
         if (e.code === 'KeyD') gameState.move.d = 1;
         if (e.code === 'Space') {
-            if (gameState.fly) gameState.move.up = 1;
-            else if (isOnGround(gameState.px, gameState.py, gameState.pz)) gameState.vy = 0.32;
+            if (gameState.fly) {
+                gameState.move.up = 1;
+            } else {
+                // only allow jump when grounded or within groundGrace (coyote time)
+                if (gameState.groundGrace > 0) {
+                    gameState.vy = 0.32;
+                    // consume the grace so we can't jump again until we land
+                    gameState.groundGrace = 0;
+                    gameState.grounded = false;
+                }
+            }
         }
         if (e.code === 'ShiftLeft') gameState.move.down = 1;
         if (e.code === 'KeyF') gameState.fly = !gameState.fly;
@@ -1195,6 +1222,8 @@ createApp({
           setupThree();
           setupInput();
           renderVisibleBlocks();
+          // ensure cameraSmoothY initialized
+          cameraSmoothY = gameState.py;
           animate();
       });
   },
