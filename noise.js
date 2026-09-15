@@ -292,9 +292,10 @@ function createWorld() {
 
     // 湖泊、仙人掌、秃树参数
     const LAKE_ATTEMPTS = 600;
-    const CACTUS_SPAWN_PROB = 0.72; // 仙人掌出现概率
+    const CACTUS_SPAWN_PROB = 0.92; // 提高仙人掌出现概率（更频繁）
     const CACTUS_MAX_HEIGHT = 5;    // 仙人掌最高高度
-    const BALD_TREE_PROB = 0.05;    // 5% 概率不生成树叶
+    const BALD_TREE_PROB = 0.05;    // 5% 概率不生成树叶（在森林/非沙漠树）
+    const BANYAN_IN_DESERT_CHANCE = 0.008; // 极少几率在沙漠出现榕树（且为秃树）
 
     function smoothstep(a, b, t) {
         if (b <= a) return t >= b ? 1 : 0;
@@ -433,10 +434,10 @@ function createWorld() {
                         }
                     }
 
-                    // 石英簇
-                    if (biome === "desert" && Math.random() < 0.05) {
-                        const clusterSeed = valueNoise.worley(x/6, z/6, 6);
-                        const clusterRadius = 1 + (clusterSeed > 0.5 ? 1 : 0); // radius 1 或 2
+                    // 沙漠石英簇：降低生成频率但扩大簇的规模（更少但更大团）
+                    if (biome === "desert" && Math.random() < 0.015) { // 由 0.05 降为 0.015
+                        // larger cluster radius 2..4
+                        const clusterRadius = 2 + Math.floor(Math.random() * 3); // 2,3,4
                         for (let ox = -clusterRadius; ox <= clusterRadius; ox++) {
                             for (let oz = -clusterRadius; oz <= clusterRadius; oz++) {
                                 const dx = ox, dz = oz;
@@ -453,7 +454,11 @@ function createWorld() {
                                 if (gy < 4) continue;
                                 // 仅在砂层顶上放 quartz 且上方空位
                                 if (blocks[gx][gy][gz] === BLOCK.sand && blocks[gx][gy+1][gz] == null) {
-                                    const p = 0.6 * (1 - valueNoise.worley(gx/3, gz/3, 6));
+                                    // use a higher p for inner cells, lower for outer ring
+                                    const dist = Math.sqrt(dx*dx + dz*dz);
+                                    const innerP = 0.85;
+                                    const outerP = 0.45;
+                                    const p = dist <= (clusterRadius * 0.6) ? innerP : outerP;
                                     if (Math.random() < p) {
                                         blocks[gx][gy+1][gz] = BLOCK.quartz_block;
                                     }
@@ -552,6 +557,27 @@ function createWorld() {
         if (biome === "pillar") continue;
 
         if (biome === "desert") {
+            // 极少概率在沙漠生成榕树（且为秃树）
+            if (Math.random() < BANYAN_IN_DESERT_CHANCE) {
+                // attempt to place a small banyan trunk (秃树)
+                const banyanHeight = 4 + Math.floor(Math.random() * 3); // 4..6
+                // check space
+                let spaceOk = true;
+                for (let h2 = 1; h2 <= banyanHeight; ++h2) {
+                    let ty = y + h2;
+                    if (ty >= WORLD_H || blocks[tx][ty][tz] !== null) { spaceOk = false; break; }
+                }
+                if (spaceOk) {
+                    for (let h2 = 1; h2 <= banyanHeight; ++h2) {
+                        blocks[tx][y+h2][tz] = BLOCK.banyan_wood;
+                    }
+                    // no leaves (秃树)
+                }
+                // Whether we placed banyan or not, continue (do not place cactus in same attempt)
+                continue;
+            }
+
+            // cactus placement: 更频繁
             if (Math.random() < CACTUS_SPAWN_PROB) {
                 let cactusHeight = 2 + Math.floor(Math.random() * CACTUS_MAX_HEIGHT);
                 for (let h2 = 1; h2 <= cactusHeight; ++h2) {
@@ -879,7 +905,7 @@ function canStand(nx, ny, nz) {
 // 更稳健的地面检测：检测脚下一点是否有实块接触（用于允许跳跃）
 function isOnGround(px, py, pz) {
     const r = 0.29;
-    // player foot approximate height offset: feet are around py - 0.8..py - 0.9
+    // player foot approximate height offset: feet are around py - 0.9
     const footCheckY = py - 0.9;
     const checkY = Math.floor(footCheckY);
     const minX = Math.floor(px - r), maxX = Math.floor(px + r);
@@ -906,7 +932,11 @@ function updateCamera() {
 
 // improved stepPlayer: use camera forward/right projected to XZ, normalize composite vector
 // and robust vertical collision handling to avoid getting stuck and to enable consistent jumps.
+// Added small hysteresis to vertical position to avoid tiny oscillations that cause view jitter.
 function stepPlayer() {
+    // store previous py for hysteresis to avoid tiny up/down jitter
+    const prevPy = gameState.py;
+
     // Build forward vector from look angles, then project to XZ plane and normalize
     const lx = Math.cos(gameState.lookV) * Math.sin(gameState.lookH);
     const lz = Math.cos(gameState.lookV) * Math.cos(gameState.lookH);
@@ -953,8 +983,6 @@ function stepPlayer() {
                 // collision occurred at this intermediate step
                 if (dy < 0) {
                     // falling — place player just above the block we collided with
-                    // find the highest non-colliding y below ny
-                    // place at floor(ny) + 1 + tiny epsilon
                     const landY = Math.floor(ny) + 1 + 0.001;
                     return { py: landY, landed: true, hitHead: false };
                 } else {
@@ -974,6 +1002,12 @@ function stepPlayer() {
     }
     if (vertRes.hitHead) {
         gameState.vy = 0;
+    }
+
+    // hysteresis: avoid tiny y oscillations that cause camera jitter
+    const Y_HYSTERESIS = 0.03;
+    if (!gameState.fly && Math.abs(py - prevPy) < Y_HYSTERESIS) {
+        py = prevPy;
     }
 
     // helper: try horizontal move with step-up (ensure foot and head clearance)
