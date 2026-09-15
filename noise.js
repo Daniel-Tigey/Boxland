@@ -228,18 +228,22 @@ function getBiome(x, z) {
     if (bio < 0.27) return "desert";
     if (bio > 0.75) return "snow";
     if (mountainMask > 0.68) return "mountain";
-    if (pillarMask > 0.86) return "pillar";
+    if (pillarMask > 0.82) return "pillar"; // 调低阈值以获得更多 pillar 区域
     return "forest";
 }
 function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
 // =========== randomOre（按深度+噪声聚簇，带生成门槛） ===========
+// 修改：加入 Worley 聚簇因子，使矿石更倾向于形成团簇
 function randomOre(x, y, z, type = 'deep_stone') {
     const depthFactor = clamp(1 - (y / (WORLD_H - 1)), 0, 1);
     const veinNoise = perlin.noise(x * 0.08, z * 0.08);
     const veinFactor = 0.6 + 0.9 * veinNoise;
+    // worley cluster factor (0..1) , higher => closer to feature center => more likely to spawn
+    const cluster = 1 - valueNoise.worley(x * 0.12, z * 0.12, 6); // scale tuned for vein size
     const baseOreChance = 0.06;
-    const spawnChance = baseOreChance * veinFactor * (type === 'deep_stone' ? 1.6 : (type === 'stone' ? 0.8 : 1.0));
+    // amplify spawnChance in cluster cores
+    const spawnChance = baseOreChance * veinFactor * (type === 'deep_stone' ? 1.6 : (type === 'stone' ? 0.8 : 1.0)) * (0.6 + 1.2 * cluster);
     if (Math.random() >= spawnChance) return null;
     const weights = [
         { ore: BLOCK.coal_mine, base: 0.12 * (0.9 + 0.2 * (1 - depthFactor)) },
@@ -252,7 +256,7 @@ function randomOre(x, y, z, type = 'deep_stone') {
     if (type === 'stone') typeModifier = 0.85;
     if (type === 'deep_stone') typeModifier = 1.25;
     let total = 0;
-    for (let w of weights) { w.final = w.base * veinFactor * typeModifier; total += w.final; }
+    for (let w of weights) { w.final = w.base * veinFactor * typeModifier * (0.5 + 0.5 * cluster); total += w.final; }
     if (total <= 0) return null;
     let r = Math.random() * total, acc = 0;
     for (let w of weights) {
@@ -304,6 +308,7 @@ function createWorld() {
         return t * t * (3 - 2 * t);
     }
 
+    // 初步地形高度与地表填充
     for (let x = 0; x < WORLD_W; x++) {
         for (let z = 0; z < WORLD_D; z++) {
             // noises
@@ -432,9 +437,8 @@ function createWorld() {
                         if (mountainHeight > 0 && h >= snowThresholdY) {
                             blocks[x][y][z] = (Math.random() < 0.875) ? BLOCK.snow : BLOCK.grass;
                         } else if (biome === "pillar") {
-                            // pillar biome surface = stone
+                            // pillar biome surface = stone (initially), but we will generate pillars in a dedicated pass
                             blocks[x][y][z] = BLOCK.stone;
-                            blocks[x][y][z] = BLOCK.quartz_block;
                         } else {
                             blocks[x][y][z] = BLOCK.grass;
                         }
@@ -477,15 +481,12 @@ function createWorld() {
                 }
             }
 
-            // water fill
-            if (h < waterLine - 1) {
-                for (let y = h + 1; y < waterLine; ++y) blocks[x][y][z] = BLOCK.water;
-            }
+            // water fill for column done below in lake pass
         }
     }
 
     // -------------------------
-    // Lake generation (fixed)
+    // Lake generation (fixed) + 清空上方方块
     // -------------------------
     for (let attempt = 0; attempt < LAKE_ATTEMPTS; attempt++) {
         const lx = Math.floor(Math.random() * (WORLD_W - 12)) + 6;
@@ -523,7 +524,7 @@ function createWorld() {
                 const carveDepth = Math.max(1, Math.ceil(factor * maxDepth));
                 let bottomY = surfaceY - carveDepth;
                 if (bottomY <= bedrockBase) bottomY = bedrockBase + 1;
-                // carve out
+                // carve out: 清空从 surfaceY 到 bottomY(不含底部砂) 的全部格子
                 for (let cy = surfaceY; cy > bottomY; cy--) blocks[tx][cy][tz] = null;
                 // lake bottom is sand
                 blocks[tx][bottomY][tz] = BLOCK.sand;
@@ -540,12 +541,19 @@ function createWorld() {
                         blocks[tx][fy][tz] = BLOCK.water;
                     }
                 }
+                // 清除湖面上方若干层的方块，避免悬挂树叶或枝干
+                const clearAbove = 4;
+                for (let ay = surfaceY + 1; ay <= surfaceY + clearAbove && ay < WORLD_H - 1; ay++) {
+                    if (blocks[tx][ay][tz] !== null) {
+                        blocks[tx][ay][tz] = null;
+                    }
+                }
             }
         }
     }
 
     // -------------------------
-    // Plants and trees (with cactus boost & bald trees)
+    // Plants and trees (with cactus boost & bald trees) - 原先的 pass
     // -------------------------
     for (let i = 0; i < 400; ++i) {
         let tx = Math.floor(Math.random() * (WORLD_W - 7) + 3),
@@ -559,7 +567,7 @@ function createWorld() {
                 break;
         if (y < 4) continue;
 
-        // pillar biome: do not place normal plants; instead generate some stone pillars here later
+        // pillar biome: skip (we handle pillars separately)
         if (biome === "pillar") continue;
 
         if (biome === "desert") {
@@ -579,7 +587,6 @@ function createWorld() {
                     }
                     // no leaves (秃树)
                 }
-                // Whether we placed banyan or not, continue (do not place cactus in same attempt)
                 continue;
             }
 
@@ -633,34 +640,101 @@ function createWorld() {
     }
 
     // -------------------------
-    // Pillar biome: generate stone pillars at some positions
+    // 增加森林群系专门种树（让森林更茂密）
     // -------------------------
-    // We do this after plants so we can ensure pillars stand on surface and avoid overwriting trees.
-    const PILLAR_ATTEMPTS = 300;
-    for (let attempt = 0; attempt < PILLAR_ATTEMPTS; attempt++) {
-        const px = Math.floor(Math.random() * (WORLD_W - 6)) + 3;
-        const pz = Math.floor(Math.random() * (WORLD_D - 6)) + 3;
-        if (getBiome(px, pz) !== "pillar") continue;
+    const FOREST_TREE_ATTEMPTS = 2500;
+    for (let i = 0; i < FOREST_TREE_ATTEMPTS; ++i) {
+        let tx = Math.floor(Math.random() * (WORLD_W - 7) + 3),
+            tz = Math.floor(Math.random() * (WORLD_D - 7) + 3);
+        if (getBiome(tx, tz) !== 'forest') continue;
+
         // find surface
+        let y;
+        for (y = WORLD_H - 5; y > 2; --y)
+            if ([BLOCK.grass, BLOCK.soil].includes(blocks[tx][y][tz]) && blocks[tx][y+1][tz] == null)
+                break;
+        if (y < 4) continue;
+
+        // choose tree size slightly larger for forest
+        let height = 5 + Math.floor(valueNoise.noise(tx*0.2, tz*0.2) * 4.0);
+        if (height < 3) height = 3;
+
+        // space check
+        let spaceOk = true;
+        for (let h2 = 1; h2 <= height + 2; ++h2) {
+            let ty = y + h2;
+            if (ty >= WORLD_H || blocks[tx][ty][tz] !== null) { spaceOk = false; break; }
+        }
+        if (!spaceOk) continue;
+
+        // place trunk
+        for (let h2 = 1; h2 <= height; ++h2) blocks[tx][y+h2][tz] = BLOCK.banyan_wood;
+
+        // leaves: larger canopy
+        for (let lx = -3; lx <= 3; ++lx)
+         for (let ly = Math.floor(height/2); ly <= height + 2; ++ly)
+          for (let lz = -3; lz <= 3; ++lz) {
+            if (Math.abs(lx) + Math.abs(lz) > 4) continue;
+            let px = tx + lx, py = y + ly, pz = tz + lz;
+            if (px < 0 || py >= WORLD_H || pz < 0 || px >= WORLD_W || pz >= WORLD_D) continue;
+            let dist = Math.abs(lx) + Math.abs(ly - height) + Math.abs(lz);
+            let dropP = 0.08 + 0.03 * dist;
+            if (Math.random() < dropP) continue;
+            if (blocks[px][py][pz] == null) blocks[px][py][pz] = BLOCK.leaf_00;
+         }
+    }
+
+    // -------------------------
+    // Pillar biome: 改进生成石柱（比之前更稳健）
+    // -------------------------
+    const PILLAR_ATTEMPTS = 1200; // 增加尝试次数
+    for (let attempt = 0; attempt < PILLAR_ATTEMPTS; attempt++) {
+        const px = Math.floor(Math.random() * (WORLD_W - 12)) + 6;
+        const pz = Math.floor(Math.random() * (WORLD_D - 12)) + 6;
+        if (getBiome(px, pz) !== "pillar") continue;
+
+        // 找到表面（允许多种表面类型）
         let sy = -1;
         for (let yy = WORLD_H - 5; yy > 2; --yy) {
             if (blocks[px][yy][pz] !== null && blocks[px][yy+1][pz] == null) { sy = yy; break; }
         }
-        if (sy < 4) continue;
-        // require surface is stone or close to stone
-        if (blocks[px][sy][pz] !== BLOCK.stone && blocks[px][sy][pz] !== BLOCK.deep_stone) continue;
-        const height = 8 + Math.floor(Math.random() * 8); // 8..15
+        if (sy < 3) continue;
+
+        // 若表面为水或lava，则跳过
+        if (blocks[px][sy][pz] === BLOCK.water || blocks[px][sy][pz] === BLOCK.lava) continue;
+
+        // decide pillar height from noise + randomness
+        const noiseH = Math.floor(4 + perlin.noise(px * 0.07, pz * 0.07) * 12); // 4..16
+        const height = clamp(noiseH + Math.floor(Math.random()*6), 6, 20);
+
+        // radial size small (1..2)
+        const radius = 1 + (Math.random() < 0.33 ? 1 : 0);
+
+        // build pillar upward; ensure we don't write into liquids above
         for (let h = 1; h <= height; ++h) {
-            let yy = sy + h;
-            if (yy >= WORLD_H - 1) break;
-            // keep top as stone & quartz; avoid overwriting liquids
-            if (blocks[px][yy][pz] === BLOCK.water || blocks[px][yy][pz] === BLOCK.lava) break;
-            blocks[px][yy][pz] = BLOCK.stone;
-            blocks[px][yy+1][pz] = BLOCK.quartz_block;
-            blocks[px+1][yy+1][pz] = BLOCK.quartz_block;
-            blocks[px][yy+1][pz+1] = BLOCK.quartz_block;
-            blocks[px-1][yy+1][pz] = BLOCK.quartz_block;
-            blocks[px][yy+1][pz-1] = BLOCK.quartz_block;
+            const yy = sy + h;
+            if (yy >= WORLD_H - 2) break;
+            // fill core
+            for (let ox = -radius; ox <= radius; ox++) {
+                for (let oz = -radius; oz <= radius; oz++) {
+                    const dist2 = ox*ox + oz*oz;
+                    if (dist2 > (radius + 0.01)*(radius + 0.01)) continue;
+                    const gx = px + ox, gz = pz + oz;
+                    if (gx < 0 || gx >= WORLD_W || gz < 0 || gz >= WORLD_D) continue;
+                    // stop if this cell is liquid
+                    if (blocks[gx][yy][gz] === BLOCK.water || blocks[gx][yy][gz] === BLOCK.lava) continue;
+                    blocks[gx][yy][gz] = BLOCK.stone;
+                }
+            }
+        }
+        // top decoration with quartz cluster
+        const topY = sy + height;
+        if (topY + 1 < WORLD_H) {
+            blocks[px][topY+1][pz] = BLOCK.quartz_block;
+            if (px+1 < WORLD_W) blocks[px+1][topY+1][pz] = BLOCK.quartz_block;
+            if (pz+1 < WORLD_D) blocks[px][topY+1][pz+1] = BLOCK.quartz_block;
+            if (px-1 >=0) blocks[px-1][topY+1][pz] = BLOCK.quartz_block;
+            if (pz-1 >=0) blocks[px][topY+1][pz-1] = BLOCK.quartz_block;
         }
     }
 
